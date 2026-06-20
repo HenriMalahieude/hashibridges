@@ -1,15 +1,24 @@
 const std = @import("std");
+const raylib = @cImport(@cInclude("raylib.h"));
+const globals = @import("./globals.zig");
 const Io = std.Io;
 
-//const hashibridges = @import("hashibridges");
+//NOTE: [*c]T is the c pointer type
 
-pub fn main(init: std.process.Init) !void {
-    // Prints to stderr, unbuffered, ignoring potential errors.
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-    _ = init;
-
-    // This is appropriate for anything that lives as long as the process.
+//init : std.process.Init as input
+pub fn main() !void {
     //const arena: std.mem.Allocator = init.arena.allocator();
+
+    std.debug.print("GAME: Initializing window of size {d} ^ 2\n", .{globals.window_square});
+    raylib.InitWindow(globals.window_square, globals.window_square, "Test Window");
+
+    while (!raylib.WindowShouldClose()) {
+        raylib.BeginDrawing();
+            raylib.ClearBackground(raylib.DARKGREEN);
+
+            raylib.DrawText("TODO", globals.window_square / 2, globals.window_square / 2, 12, raylib.BLACK);
+        raylib.EndDrawing();
+    }
 
     // Accessing command line arguments:
     //const args = try init.minimal.args.toSlice(arena);
