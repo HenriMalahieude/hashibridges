@@ -20,7 +20,7 @@ pub fn main() !void {
 
     while (!raylib.WindowShouldClose()) {
         raylib.BeginDrawing();
-            raylib.ClearBackground(raylib.DARKGREEN);
+            raylib.ClearBackground(globals.bg_color);
 
             board.Draw();
         raylib.EndDrawing();
