@@ -1,9 +1,13 @@
 const std = @import("std");
-const raylib = @cImport(@cInclude("raylib.h"));
 const globals = @import("./globals.zig");
+const boardImpl = @import("./board.zig");
+const raylib = globals.raylib;
 const Io = std.Io;
 
 //NOTE: [*c]T is the c pointer type
+
+var difficulty : globals.Difficulty = globals.Difficulty.Easy;
+var board : boardImpl.Board = undefined;
 
 //init : std.process.Init as input
 pub fn main() !void {
@@ -12,11 +16,13 @@ pub fn main() !void {
     std.debug.print("GAME: Initializing window of size {d} ^ 2\n", .{globals.window_square});
     raylib.InitWindow(globals.window_square, globals.window_square, "Test Window");
 
+    board.Generate(globals.DifficultyNodes.get(difficulty));
+
     while (!raylib.WindowShouldClose()) {
         raylib.BeginDrawing();
             raylib.ClearBackground(raylib.DARKGREEN);
 
-            raylib.DrawText("TODO", globals.window_square / 2, globals.window_square / 2, 12, raylib.BLACK);
+            board.Draw();
         raylib.EndDrawing();
     }
 
