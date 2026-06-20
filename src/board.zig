@@ -19,15 +19,10 @@ pub const Board = struct {
     /// Generate a New Puzzle to be solved
     pub fn Generate(self : *Board, square : u16) void {
         _ = square;
-        for (0..self.edge_h.len) |x| {
-            for (0..self.edge_h[x].len) |y| {
-                self.edge_h[x][y] = ConnectionType.Void;
-            }
-        }
-
-        for (0..self.edge_v.len) |x| {
-            for (0..self.edge_v[x].len) |y| {
-                self.edge_v[x][y] = ConnectionType.Void;
+        for (0..globals.max_board_square-1) |small| {
+            for (0..globals.max_board_square) |big| {
+                self.edge_h[small][big] = ConnectionType.Void;
+                self.edge_v[big][small] = ConnectionType.Void;
             }
         }
     }
