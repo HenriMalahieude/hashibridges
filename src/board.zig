@@ -4,100 +4,126 @@ const assert = std.debug.assert;
 const globals = @import("globals.zig");
 const raylib = globals.raylib;
 
-
 /// Represents the game state
 pub const Board = struct {
     const ConnectionType = enum { None, Single, Double, Void };
     const GameState = enum { Ungenerated, Running, Complete };
+    const Directions = enum { Right, Down }; //no need to store duplicate information
 
-    /// Edges from left to right
-    edge_h : [globals.max_board_square-1][globals.max_board_square] ConnectionType = undefined, //horizontal
-    user_h : [globals.max_board_square-1][globals.max_board_square] ConnectionType = undefined,
+    const Node = struct {
+        x : u16 = 0,
+        y : u16 = 0,
+        connections : std.EnumArray(Directions, ConnectionType),
+        user_connections : std.EnumArray(Directions, ConnectionType),
+    };
 
-    /// Edges from top to bottom
-    edge_v : [globals.max_board_square][globals.max_board_square-1] ConnectionType = undefined, //vertical
-    user_v : [globals.max_board_square][globals.max_board_square-1] ConnectionType = undefined,
+    grid : [globals.MaxNodes] Node = undefined,
+    nodes : u16 = 0,
+    square: u16 = 0,
 
-    /// Current State of the Game
     state : GameState = GameState.Ungenerated,
 
-    /// Current Node Count of the Board
-    nodes : u8 = 0,
-
-    /// Generate a New Puzzle to be solved
-    pub fn Generate(self : *Board, square : u8) void {
-        self.nodes = square;
-
-        for (0..globals.max_board_square-1) |small| { //defaults for the board
-            for (0..globals.max_board_square) |big| {
-                if (small >= square-1 or big >= square)  {
-                    self.edge_h[small][big] = ConnectionType.Void;
-                    self.edge_v[big][small] = ConnectionType.Void;
-                } else {
-                    self.edge_h[small][big] = ConnectionType.Double;
-                    self.edge_v[big][small] = ConnectionType.Double;
-                }
+    fn LocateNode(self : *Board, x : u16, y : u16) ?usize {
+        for (0..self.nodes) |i| {
+            if (self.grid[i].x == x and self.grid[i].y == y) {
+                return i;
             }
         }
+
+        return null;
+    }
+
+    /// Generate a New Puzzle to be solved
+    pub fn Generate(self : *Board, settings : globals.DifficultySetting) void {
+        for (0..settings.Nodes) |i| {
+            self.nodes = @truncate(i);
+
+            var x: u16 = @intCast(raylib.GetRandomValue(0, settings.Square-1));
+            var y: u16 = @intCast(raylib.GetRandomValue(0, settings.Square-1));
+            while (self.LocateNode(x, y) != null) {
+                x = @intCast(raylib.GetRandomValue(0, settings.Square-1));
+                y = @intCast(raylib.GetRandomValue(0, settings.Square-1));
+            }
+
+            self.grid[i] = .{
+                .x=x,
+                .y=y,
+                .connections = std.EnumArray(Directions, ConnectionType).init(.{
+                    .Right = ConnectionType.Void,
+                    .Down = ConnectionType.Void,
+                }),
+
+                .user_connections = std.EnumArray(Directions, ConnectionType).init(.{
+                    .Right = ConnectionType.Void,
+                    .Down = ConnectionType.Void,
+                }),
+            };
+        }
+
+        self.nodes = settings.Nodes;
+        self.square = settings.Square;
     }
 
     /// Draw the Screen using Raylib
     pub fn Draw(self : *Board) void {
-        const board_square = globals.window_square - globals.interface_margin;
-        const node_space = board_square / @as(u16, self.nodes); //in pix
-        const text_sz = node_space / 5;
+        const board_square: u32 = globals.window_square - globals.interface_margin;
+        const node_space: u32 = board_square / @as(u32, self.square); //in pix
+        const node_rd: u32 = node_space / 4; //radius, leave some room for bridges
+        const text_sz: u32 = node_space / 5;
 
-        // Draw the Nodes
-        for (0..self.nodes) |x| {
-            for (0..self.nodes) |y| {
-                const am = self.ComputeNodeBridgeTotal(x, y);
-                const pix_x = @as(u16, @truncate(x)) * node_space + (globals.interface_margin/2) + (node_space/2);
-                const pix_y = @as(u16, @truncate(y)) * node_space + (globals.interface_margin/2) + (node_space/2);
+        //center of the start locations
+        const strt_x: u32 = (globals.interface_margin/2) + (node_space/2);
+        const strt_y: u32 = (globals.interface_margin/2) + (node_space/2);
 
-                //Draw the Circle representing the node
-                raylib.DrawCircle(pix_x, pix_y, node_space/4, raylib.BLACK);
-                raylib.DrawCircle(pix_x, pix_y, node_space/5, globals.bg_color);
+        //Draw the Grid first
+        for (0..self.square) |i| {
+            const delta = @as(u32, @truncate(i)) * node_space;
 
-                //Draw the Text showing the bridge count
-                const buf = [_:0]u8{'0'+am};
-                const txtPixSz = raylib.MeasureTextEx(raylib.GetFontDefault(), &buf, text_sz, 0);
-                raylib.DrawText(&buf, pix_x - @as(u16, @intFromFloat(txtPixSz.x/2)), pix_y - @as(u16, @intFromFloat(txtPixSz.y/2)), text_sz, globals.tx_color);
+            const rg_start: raylib.Vector2 = .{
+                .x=@floatFromInt(strt_x),
+                .y=@floatFromInt(strt_y+delta),
+            };
+            const cg_start: raylib.Vector2 = .{
+                .x=@floatFromInt(strt_x+delta),
+                .y=@floatFromInt(strt_y),
+            };
 
-                //Draw the Edges to the right and bottom
-                //TODO
-            }
+            const rg_end: raylib.Vector2 = .{
+                .x=@floatFromInt(strt_x + board_square - node_space),
+                .y=rg_start.y,
+            };
+            const cg_end: raylib.Vector2 = .{
+                .x=cg_start.x,
+                .y=@floatFromInt(strt_y + board_square - node_space),
+            };
+            raylib.DrawLineV(rg_start, rg_end, raylib.GRAY);
+            raylib.DrawLineV(cg_start, cg_end, raylib.GRAY);
+        }
+
+        //TODO: The bridges
+
+        for (0..self.nodes) |i| {
+            const nd: *Node = &self.grid[i];
+
+            const pix_x: c_int = @intCast(strt_x + nd.x * node_space);
+            const pix_y: c_int = @intCast(strt_y + nd.y * node_space);
+
+            //Draw the Node
+            raylib.DrawCircle(pix_x, pix_y, @floatFromInt(node_rd), raylib.BLACK);
+            raylib.DrawCircle(pix_x, pix_y, @as(f32, @floatFromInt(node_rd)) * 0.9, globals.bg_color);
+
+            //Draw the Bridge Count
+            const buf = [_:0]u8{'0'}; //TODO: Get the amount
+            const txtPixSz = raylib.MeasureTextEx(raylib.GetFontDefault(), &buf, @as(f32, @floatFromInt(text_sz)), 0);
+            raylib.DrawText(&buf, pix_x - @as(u16, @intFromFloat(txtPixSz.x/2)), pix_y - @as(u16, @intFromFloat(txtPixSz.y/2)), @intCast(text_sz), globals.tx_color);
+
         }
     }
 
-    fn ComputeNodeBridgeTotal(self : *Board, x : usize, y : usize) u8 {
-        var total : u8 = 0;
-
-        if (x != 0) { //left side
-            const am = @intFromEnum(self.edge_h[x-1][y]);
-            assert(am < 3);
-            total += am;
-        }
-
-        if (x < self.nodes-1) { //right side
-            const am = @intFromEnum(self.edge_h[x][y]);
-            assert(am < 3);
-            total += am;
-        }
-
-        if (y != 0) { //above
-            const am = @intFromEnum(self.edge_v[x][y-1]);
-            assert(am < 3);
-            total += am;
-        }
-
-        if (y < self.nodes-1) { //below
-            const am = @intFromEnum(self.edge_v[x][y]);
-            assert(am < 3);
-            total += am;
-        }
-
-        assert(total <= 8);
-        return total;
+    fn ComputeNodeBridgeTotal(self : *Board, x : usize, y : usize) u16 {
+        _ = self;
+        _ = x;
+        _ = y;
     }
 
     /// Interact with the board using Raylib

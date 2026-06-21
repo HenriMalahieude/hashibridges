@@ -16,7 +16,7 @@ pub fn main() !void {
     std.debug.print("GAME: Initializing window of size {d} ^ 2\n", .{globals.window_square});
     raylib.InitWindow(globals.window_square, globals.window_square, "Test Window");
 
-    board.Generate(globals.DifficultyNodes.get(difficulty));
+    board.Generate(globals.DifficultyOptions.get(difficulty));
 
     while (!raylib.WindowShouldClose()) {
         raylib.BeginDrawing();
