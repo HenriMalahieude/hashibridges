@@ -69,10 +69,28 @@ pub const Board = struct {
     }
 
     fn NodeLocateDirUncrossed(self: *Board, x: u16, y: u16, dir: Directions, pos: bool) ?usize {
-        var out: ?usize = self.NodeLocateDir(x, y, dir, pos);
+        const out: ?usize = self.NodeLocateDir(x, y, dir, pos);
 
-        if (out) {
-            //TODO
+        if (out != null) {
+            const horz_axis = (self.grid[out.?].y == y); //otherwise it's vert
+            for (0..self.nodes) |i| {
+                var axi_in_q: u16 = self.grid[i].y; var axi_of_a: u16 = y; //in question, of answer
+                var loc_in_q: u16 = self.grid[i].x; var loc_of_a: u16 = x; var loc2_of_a: u16 = self.grid[out.?].x;
+                var dir_in_q: Directions = Directions.Down;
+
+                if (!horz_axis) {
+                    axi_in_q = self.grid[i].x; axi_of_a = x;
+                    loc_in_q = self.grid[i].y; loc_of_a = y; loc2_of_a = self.grid[out.?].y;
+                    dir_in_q = Directions.Right;
+                }
+
+                if (axi_in_q < axi_of_a //only check the edges relevant (Only Right and Down edges)
+                    and ((loc_in_q > loc2_of_a and loc_in_q < loc_of_a ) //Only check those inbetween these two nodes
+                        or (loc_in_q > loc_of_a and loc_in_q < loc2_of_a))) {
+
+                    if (self.grid[i].connections.get(dir_in_q) != ConnectionType.None) return null;
+                }
+            }
         }
 
         return out;
@@ -92,7 +110,7 @@ pub const Board = struct {
             }
 
             self.grid[i] = .{
-                .id=x*3+y*5,
+                .id=@truncate(i),
                 .x=x,
                 .y=y,
                 .connections = std.EnumArray(Directions, ConnectionType).init(.{
@@ -110,56 +128,96 @@ pub const Board = struct {
         self.nodes = settings.Nodes;
         self.square = settings.Square;
 
-        var id_cnt: u16 = self.nodes;
-        while (id_cnt > 1) { //TODO: This don't work
-            const nidx: usize = @intCast(raylib.GetRandomValue(0, self.nodes));
-            const n: *Node = &self.grid[nidx];
+        // An Implementation of Kruskal's Minimum Spanning Tree Algorithm, formatted for Maze Generation, then reformatted for Hashi
+        var prv_id_cnt: usize = 0;
+        var distance_max: u16 = self.square / 2;
+        while (true) {
 
-            const dir: Directions = @enumFromInt(raylib.GetRandomValue(0, 1));
-            const pos: bool = (raylib.GetRandomValue(0, 1) == 1);
+            //Connect all nodes normally
+            for (0..self.nodes) |i| { //no need to randomly select node, each node alr has random position
+                const n: *Node = &self.grid[i];
+                const right = self.NodeLocateDirUncrossed(n.x, n.y, Directions.Right, true);
+                const down = self.NodeLocateDirUncrossed(n.x, n.y, Directions.Down, true);
+                if (right == null and down == null) continue; //they are irrelevant
 
-            const oidx: ?usize = self.NodeLocateDir(n.x, n.y, dir, pos);
+                const horz = raylib.GetRandomValue(0, 1) == 1;
+                if ((horz or down == null) and right != null) {
+                    if (@abs(self.grid[right.?].x - n.x) > distance_max) continue; //distance check
+                    n.connections.set(Directions.Right, ConnectionType.Single);
+                    std.debug.print("({d}, {d})[{d}] -> ({d}, {d})[{d}]\n", .{n.x, n.y, n.id, self.grid[right.?].x, self.grid[right.?].y, self.grid[right.?].id});
 
-            if (oidx) |oid| {
-                const o: *Node = &self.grid[oid];
-                if (o.id != n.id) {
-                    //std.debug.print("Setting all {d} to {d}\n", o.id, n.id);
+                    //only unique ids per node on instantiation
+                    //if nodes share id, they must therefore be connected
+                    for (0..self.nodes) |j| { if (self.grid[j].id == self.grid[right.?].id) { self.grid[j].id = n.id; } }
+                } else if (down != null) {
+                    if (@abs(self.grid[down.?].y - n.y) > distance_max) continue; //distance check
+                    n.connections.set(Directions.Down, ConnectionType.Single);
+                    std.debug.print("({d}, {d})[{d}] -> ({d}, {d})[{d}]\n", .{n.x, n.y, n.id, self.grid[down.?].x, self.grid[down.?].y, self.grid[down.?].id});
+
+                    for (0..self.nodes) |j| { if (self.grid[j].id == self.grid[down.?].id) { self.grid[j].id = n.id; } }
+                }
+            }
+
+            //Are we done?
+            std.debug.print("\t", .{});
+            var id_cnt: usize = 0;
+            var ids: [globals.MaxNodes]u16 = undefined;
+            for (0..self.nodes) |i| {
+                var unique: bool = true;
+                for (0..id_cnt) |j| {
+                    if (ids[j] == self.grid[i].id) {
+                        unique = false;
+                        break;
+                    }
+                }
+
+                if (unique) {
+                    ids[id_cnt] = self.grid[i].id;
+                    id_cnt += 1;
+                    std.debug.print("{d} ", .{self.grid[i].id});
+                }
+            }
+            std.debug.print("\n", .{});
+
+            //If we should've been done
+            if (prv_id_cnt == id_cnt) { //we've reached an impass due to either a distance issue or blocking edge
+                if (distance_max != self.square) {
+                    distance_max = self.square; //expand the max distance
+                    continue;
+                } else { //an edge is blocking us
                     for (0..self.nodes) |i| {
-                        if (self.grid[i].id == o.id) self.grid[i].id = n.id;
-                    }
+                        const n: *Node = &self.grid[i];
 
-                    id_cnt -= 1;
-                    o.bridges += 1;
-                    n.bridges += 1;
+                        const right = self.NodeLocateDir(n.x, n.y, Directions.Right, true);
+                        const down = self.NodeLocateDir(n.x, n.y, Directions.Down, true);
+                        if (right == null and down == null) continue; //irrelevant
 
-                    if (pos) {
-                        n.connections.set(dir, ConnectionType.Single);
-                    } else {
-                        o.connections.set(dir, ConnectionType.Single);
+                        const rightu = self.NodeLocateDirUncrossed(n.x, n.y, Directions.Right, true);
+                        const downu = self.NodeLocateDirUncrossed(n.x, n.y, Directions.Down, true);
+
+                        var target: ?usize = null;
+                        if (right != null and rightu == null) { target = right; } //located where the edge is blocking us
+                        else if (down != null and downu == null) { target = down; }
+
+                        if (target == null) continue;
+                        for (0..self.nodes) |j| {
+                            const horz = (right != null); //we default to right, above
+                            _ = j;
+
+                            if (horz) {
+
+                            } else {
+
+                            }
+                        }
                     }
+                    break; //continue;
                 }
             }
+
+            prv_id_cnt = id_cnt;
+            if (id_cnt <= 1) break;
         }
-
-        id_cnt = 0;
-        var ids: [globals.MaxNodes]u16 = undefined;
-        for (0..self.nodes) |i| {
-            var unique: bool = true;
-            for (0..id_cnt) |j| {
-                if (ids[j] == self.grid[i].id) {
-                    unique = false;
-                    break;
-                }
-            }
-
-            if (unique) {
-                ids[id_cnt] = self.grid[i].id;
-                id_cnt += 1;
-            }
-        }
-
-        std.debug.print("{d}\n", .{id_cnt});
-        //assert(id_cnt == 1);
     }
 
     /// Draw the Screen using Raylib
