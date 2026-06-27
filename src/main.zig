@@ -24,6 +24,10 @@ pub fn main() !void {
 
             board.Draw();
         raylib.EndDrawing();
+
+        if (raylib.IsKeyReleased(raylib.KEY_E)) board.ConnectionStep(1);
+        if (raylib.IsKeyReleased(raylib.KEY_W)) board.ConnectionStep(4);
+        if (raylib.IsKeyReleased(raylib.KEY_Q)) board.Generate(globals.DifficultyOptions.get(difficulty));
     }
 
     // Accessing command line arguments:
