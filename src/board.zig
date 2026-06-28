@@ -25,6 +25,7 @@ pub const Board = struct {
     grid : [globals.MaxNodes] Node = undefined,
     nodes : u16 = 0,
     square: u16 = 0,
+    double_chance: u16 = 0,
 
     state : GameState = GameState.Ungenerated,
 
@@ -106,15 +107,33 @@ pub const Board = struct {
 
     /// Generate a New Puzzle to be solved
     pub fn Generate(self : *Board, settings : globals.DifficultySetting) void {
-        //Create the nodes
-        for (0..settings.Nodes) |i| {
+        self.square = settings.Square;
+        self.double_chance = settings.DoubleChance;
+
+        self.PlaceNodes(settings.Nodes); //create the nodes of interest
+
+        self.DeleteUnreachableNodes(); //unreachable nodes should be reclaimed
+
+        self.ConnectionStep(-1);
+        //self.ResolveUnconnectedSubGraphs();
+        //self.RebuildDeletedNodes();
+        //self.Simplify();
+        //self.SaltDoubles();
+        //self.EvaluateBridgeCounts();
+    }
+
+    pub fn PlaceNodes(self: *Board, am: u16) void {
+        //Create the nodes, cannot overlap or be within 1 dist from each other
+        var i: usize = 0;
+        var retries: u16 = 0;
+        while (i < am) : (i += 1) {
             self.nodes = @truncate(i);
 
-            var x: u16 = @intCast(raylib.GetRandomValue(0, settings.Square-1));
-            var y: u16 = @intCast(raylib.GetRandomValue(0, settings.Square-1));
-            while (self.NodeLocateCoord(x, y) != null) {
-                x = @intCast(raylib.GetRandomValue(0, settings.Square-1));
-                y = @intCast(raylib.GetRandomValue(0, settings.Square-1));
+            const x: u16 = @intCast(raylib.GetRandomValue(0, self.square-1));
+            const y: u16 = @intCast(raylib.GetRandomValue(0, self.square-1));
+            if (self.NodeLocateCoord(x, y) != null) {
+                if (i != 0) i -= 1;
+                continue;
             }
 
             self.grid[i] = .{
@@ -131,11 +150,39 @@ pub const Board = struct {
                     .Down = ConnectionType.None,
                 }),
             };
+
+            if (retries < (am/2)) {
+                var too_close: bool = false;
+                for (0..self.nodes) |j| {
+                    const n: *Node = &self.grid[j];
+                    const diff_x = if (n.x > x) n.x - x else x - n.x;
+                    const diff_y = if (n.y > y) n.y - y else y - n.y;
+                    if ((diff_y <= globals.min_node_dist and diff_x == 0)
+                        or (diff_x <= globals.min_node_dist and diff_y == 0)) {
+                        too_close = true;
+                        break;
+                    }
+
+                }
+
+                if (too_close) {
+                    //Manually Locate a Solid Location
+                    if (self.nodes >= (am / 2)) {
+                        retries += 1; //we may have exhausted all possible places
+                    }
+                    i -= 1;
+                    continue;
+                }
+            } else {
+                //std.debug.print("Reached maximum retries {d}\n", .{i});
+                retries = 0;
+            }
         }
 
-        self.nodes = settings.Nodes;
-        self.square = settings.Square;
+        self.nodes = am;
+    }
 
+    pub fn DeleteUnreachableNodes(self: *Board) void {
         //Nuke all nodes w/o possible targets
         var i: usize = 0;
         while (i < self.nodes) : (i += 1) {
@@ -149,8 +196,6 @@ pub const Board = struct {
                 if (i > 0) i -= 1;
             }
         }
-
-        //self.ConnectionStep(-1);
     }
 
     pub fn DeleteNode(self: *Board, idx: usize) void {
@@ -229,7 +274,7 @@ pub const Board = struct {
             }
 
             //Are we done?
-            std.debug.print("\t", .{});
+            //std.debug.print("\t", .{});
             var id_cnt: usize = 0;
             var ids: [globals.MaxNodes]struct{id:u16, cnt:u32} = undefined;
             for (0..self.nodes) |i| {
@@ -249,42 +294,67 @@ pub const Board = struct {
                 }
             }
 
-            std.debug.print("\n", .{});
-            for (0..id_cnt) |i| {
-                std.debug.print("Id: {d}, Cnt: {d}\n", .{ids[i].id, ids[i].cnt});
-            }
+            //std.debug.print("\n", .{});
+            //for (0..id_cnt) |i| {
+            //    std.debug.print("Id: {d}, Cnt: {d}\n", .{ids[i].id, ids[i].cnt});
+            //}
 
             //If we should've been done
             if (prv_id_cnt == id_cnt) { //we've reached an impass due to either a distance issue or blocking edge
-                std.debug.print("Previous id count is equal to current!\n", .{});
+                //std.debug.print("Previous id count is equal to current!\n", .{});
                 if (distance_max != self.square) {
                     distance_max = self.square; //expand the max distance
                     //std.debug.print("Expanding max distance!\n", .{});
                     continue;
                 } else { //max distance wasn't the issue
-                    var dealt_with: bool = false;
-                    for (0..id_cnt) |i| {
-                        if (ids[i].cnt <= @max((self.nodes / 5), 2)) { //delete any subgraph with less than 20% of nodes
-                            self.DeleteNodesById(ids[i].id);
-                            std.debug.print("Deleting\n", .{});
-                            dealt_with = true; //one step is dealt with
-                            break;
-                        }
-                    }
-
-                    if (dealt_with) continue;
-                    std.debug.print("Not dealt with!\n", .{});
-
-                    //TODO: Three Options
-                    //      1. Remove a blocking edge
-                    //      2. Remove the island <= easiest to do
-                    //      3. Regenerate off of the main island
                     break;
                 }
             }
 
             prv_id_cnt = id_cnt;
             if (id_cnt <= 1) break;
+        }
+    }
+
+    //TODO: Options
+    //      1. If spare nodes, attempt to add some that are far enough away from others
+    //      2. If no spares, attempt to move some nodes in an unbreaking direction
+    //      3. If failed, delete the graph
+
+    //pub fn ResolveUnconnectedSubgraphs(self: *Board) void {
+    //    for (0..id_cnt) |i| {
+    //        if (ids[i].cnt <= @max((self.nodes / 5), 2)) { //delete any subgraph with less than 20% of nodes
+    //            self.DeleteNodesById(ids[i].id);
+    //            std.debug.print("Deleting\n", .{});
+    //            dealt_with = true; //one step is dealt with
+    //            break;
+    //        }
+    //    }
+    //}
+
+    //TODO:
+    //      1. Nodes that continue the same connection without branching clog info, remove them
+    //      2. Nodes should extend to right before their information
+
+    //pub fn SimplifyGraph(self: *Board) void { }
+
+    //Randomly select
+    pub fn SaltDoubles(self: *Board) void {
+        for (0..self.nodes) |i| {
+            const n: *Node = &self.grid[i];
+            if (n.connections.get(.Right) != .None) {
+                const value = raylib.GetRandomValue(0, 100);
+                if (value < self.double_chance) {
+                    n.connections.set(.Right, .Double);
+                }
+            }
+
+            if (n.connections.get(.Down) != .None) {
+                const value = raylib.GetRandomValue(0, 100);
+                if (value < self.double_chance) {
+                    n.connections.set(.Down, .Double);
+                }
+            }
         }
     }
 
@@ -340,8 +410,8 @@ pub const Board = struct {
                 const oidx: usize = self.NodeLocateDir(i, Direction.Right, true) orelse unreachable;
                 const dist = @abs(self.grid[oidx].x - nd.x);
 
-                raylib.DrawRectangle(pix_x, pix_y+@as(c_int, @intCast(brdg_sz*2)), @intCast(node_space*dist), @intCast(brdg_sz), raylib.BLACK);
-                raylib.DrawRectangle(pix_x, pix_y-@as(c_int, @intCast(brdg_sz*2)), @intCast(node_space*dist), @intCast(brdg_sz), raylib.BLACK);
+                raylib.DrawRectangle(pix_x, pix_y+@as(c_int, @intCast(brdg_sz*1)), @intCast(node_space*dist), @intCast(brdg_sz), raylib.BLACK);
+                raylib.DrawRectangle(pix_x, pix_y-@as(c_int, @intCast(brdg_sz*1)), @intCast(node_space*dist), @intCast(brdg_sz), raylib.BLACK);
             }
 
             if (nd.connections.get(Direction.Down) == ConnectionType.Single) {
@@ -353,8 +423,8 @@ pub const Board = struct {
                 const oidx: usize = self.NodeLocateDir(i, Direction.Down, true) orelse unreachable;
                 const dist = @abs(self.grid[oidx].y - nd.y);
 
-                raylib.DrawRectangle(pix_x+@as(c_int, @intCast(brdg_sz*2)), pix_y, @intCast(brdg_sz), @intCast(node_space*dist), raylib.BLACK);
-                raylib.DrawRectangle(pix_x-@as(c_int, @intCast(brdg_sz*2)), pix_y, @intCast(brdg_sz), @intCast(node_space*dist), raylib.BLACK);
+                raylib.DrawRectangle(pix_x+@as(c_int, @intCast(brdg_sz*1)), pix_y, @intCast(brdg_sz), @intCast(node_space*dist), raylib.BLACK);
+                raylib.DrawRectangle(pix_x-@as(c_int, @intCast(brdg_sz*1)), pix_y, @intCast(brdg_sz), @intCast(node_space*dist), raylib.BLACK);
             }
 
         }
@@ -369,18 +439,12 @@ pub const Board = struct {
             raylib.DrawCircle(pix_x, pix_y, @floatFromInt(node_rd), raylib.BLACK);
             raylib.DrawCircle(pix_x, pix_y, @as(f32, @floatFromInt(node_rd)) * 0.9, globals.bg_color);
 
-            //Draw the Bridge Count
+            //Draw the Bridge Count (TODO: Currently drawing the id)
             const buf = [_:0]u8{'0'+@as(u8, @truncate(nd.id))};
             const txtPixSz = raylib.MeasureTextEx(raylib.GetFontDefault(), &buf, @as(f32, @floatFromInt(text_sz)), 0);
             raylib.DrawText(&buf, pix_x - @as(u16, @intFromFloat(txtPixSz.x/2)), pix_y - @as(u16, @intFromFloat(txtPixSz.y/2)), @intCast(text_sz), globals.tx_color);
 
         }
-    }
-
-    fn ComputeNodeBridgeTotal(self : *Board, x : usize, y : usize) u16 {
-        _ = self;
-        _ = x;
-        _ = y;
     }
 
     /// Interact with the board using Raylib

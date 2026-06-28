@@ -3,10 +3,12 @@ const std = @import("std");
 pub const raylib = @cImport(@cInclude("raylib.h"));
 
 /// Interface constants
-pub const window_square : u16 = 800; // Width and Height
-pub const interface_margin : u16 = 100; // Margin around the board
+pub const window_square: u16 = 800; // Width and Height
+pub const interface_margin: u16 = 100; // Margin around the board
 
-pub const max_board_square : u16 = 20;
+pub const max_board_square: u16 = 20;
+pub const min_node_dist: u16 = 1; //between nodes there must be N empty spaces
+//pub const max_node_retry: u16 = 10; //maximum amount of times a node will retry when failing the distance check
 
 pub const bg_color = raylib.WHITE;
 pub const tx_color = raylib.BLACK;
@@ -26,9 +28,9 @@ pub const DifficultySetting = struct {
 
 pub const MaxNodes = DifficultyOptions.get(Difficulty.Crzy).Nodes;
 pub const DifficultyOptions = std.EnumArray(Difficulty, DifficultySetting).init(.{
-    .Easy = .{.Nodes =  12, .Square =  5, .DoubleChance = 20}, // 12 /  25 = .50
-    .Medi = .{.Nodes =  40, .Square = 10, .DoubleChance = 40}, // 60 / 100 = .60
-    .Hard = .{.Nodes =  90, .Square = 15, .DoubleChance = 60}, //125 / 225 = .60
-    .Crzy = .{.Nodes = 160, .Square = 20, .DoubleChance = 60}, //250 / 400 = .625
+    .Easy = .{.Nodes = 10, .Square =  6, .DoubleChance = 20}, //aiming for a 30% filling of the board
+    .Medi = .{.Nodes = 30, .Square = 12, .DoubleChance = 40},
+    .Hard = .{.Nodes = 58, .Square = 14, .DoubleChance = 60},
+    .Crzy = .{.Nodes = 76, .Square = 16, .DoubleChance = 60},
 });
 

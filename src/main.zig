@@ -6,7 +6,7 @@ const Io = std.Io;
 
 //NOTE: [*c]T is the c pointer type
 
-var difficulty : globals.Difficulty = globals.Difficulty.Easy;
+var difficulty : globals.Difficulty = globals.Difficulty.Medi;
 var board : boardImpl.Board = undefined;
 
 //init : std.process.Init as input
@@ -25,6 +25,7 @@ pub fn main() !void {
             board.Draw();
         raylib.EndDrawing();
 
+        if (raylib.IsKeyReleased(raylib.KEY_R)) board.SaltDoubles();
         if (raylib.IsKeyReleased(raylib.KEY_E)) board.ConnectionStep(1);
         if (raylib.IsKeyReleased(raylib.KEY_W)) board.ConnectionStep(4);
         if (raylib.IsKeyReleased(raylib.KEY_Q)) board.Generate(globals.DifficultyOptions.get(difficulty));
