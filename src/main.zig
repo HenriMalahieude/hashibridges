@@ -19,35 +19,17 @@ pub fn main() !void {
     board.Generate(globals.DifficultyOptions.get(difficulty));
 
     while (!raylib.WindowShouldClose()) {
+        //NOTE: Mobile seems to handle interactions before the drawing better
+        if (raylib.IsKeyReleased(raylib.KEY_T)) board.ResolveUnconnectedSubgraphs();
+        if (raylib.IsKeyReleased(raylib.KEY_R)) board.SaltDoubles();
+        if (raylib.IsKeyReleased(raylib.KEY_E)) board.ConnectionStep(1);
+        if (raylib.IsKeyReleased(raylib.KEY_W)) board.ConnectionStep(4);
+        if (raylib.IsKeyReleased(raylib.KEY_Q)) board.Generate(globals.DifficultyOptions.get(difficulty));
+
         raylib.BeginDrawing();
             raylib.ClearBackground(globals.bg_color);
 
             board.Draw();
         raylib.EndDrawing();
-
-        if (raylib.IsKeyReleased(raylib.KEY_R)) board.SaltDoubles();
-        if (raylib.IsKeyReleased(raylib.KEY_E)) board.ConnectionStep(1);
-        if (raylib.IsKeyReleased(raylib.KEY_W)) board.ConnectionStep(4);
-        if (raylib.IsKeyReleased(raylib.KEY_Q)) board.Generate(globals.DifficultyOptions.get(difficulty));
     }
-
-    // Accessing command line arguments:
-    //const args = try init.minimal.args.toSlice(arena);
-    //for (args) |arg| {
-    //    std.log.info("arg: {s}", .{arg});
-    //}
-
-    // In order to do I/O operations need an `Io` instance.
-    //const io = init.io;
-
-    // Stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    //var stdout_buffer: [1024]u8 = undefined;
-    //var stdout_file_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buffer);
-    //const stdout_writer = &stdout_file_writer.interface;
-
-    //try hashibridges.printAnotherMessage(stdout_writer);
-
-    //try stdout_writer.flush(); // Don't forget to flush!
 }

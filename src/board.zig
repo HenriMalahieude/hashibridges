@@ -4,7 +4,7 @@ const assert = std.debug.assert;
 const globals = @import("globals.zig");
 const raylib = globals.raylib;
 
-// Somehow this isn't located within raylib.h even though it's in there?
+//Complaint: Somehow this isn't located within raylib.h even though it's in there?
 pub extern "c" fn DrawLineDashed(a: raylib.Vector2, b: raylib.Vector2, c: c_int, d: c_int, e: raylib.Color) void;
 
 /// Represents the game state
@@ -22,8 +22,14 @@ pub const Board = struct {
         user_connections : std.EnumArray(Direction, ConnectionType) = undefined,
     };
 
+    const IdInfo = struct { //Complaint: Apparently zig cannot recognize anonymous structs that are the same....
+        id: u16,
+        cnt: u32,
+    };
+
     grid : [globals.MaxNodes] Node = undefined,
     nodes : u16 = 0,
+    max_nodes : u16 = 0,
     square: u16 = 0,
     double_chance: u16 = 0,
 
@@ -44,7 +50,7 @@ pub const Board = struct {
 
         var out: ?usize = null;
         var dist: usize = self.square + 1;
-        for (0..self.nodes) |i| {
+        for (0..self.nodes) |i| { //Complaint: I'd like to set the type of the capture variable, is that possible?
             if ( i == idx ) { continue; }
             const n = &self.grid[i];
 
@@ -111,24 +117,24 @@ pub const Board = struct {
         self.double_chance = settings.DoubleChance;
 
         self.PlaceNodes(settings.Nodes); //create the nodes of interest
+        self.max_nodes = settings.Nodes;
 
         self.DeleteUnreachableNodes(); //unreachable nodes should be reclaimed
 
         self.ConnectionStep(-1);
-        //self.ResolveUnconnectedSubGraphs();
+        self.ResolveUnconnectedSubgraphs();
         //self.RebuildDeletedNodes();
         //self.Simplify();
-        //self.SaltDoubles();
-        //self.EvaluateBridgeCounts();
+        self.SaltDoubles();
+        self.EvaluateBridgeCounts();
     }
 
+    //Create the nodes, cannot overlap or be within 1 dist from each other
     pub fn PlaceNodes(self: *Board, am: u16) void {
-        //Create the nodes, cannot overlap or be within 1 dist from each other
         var i: usize = 0;
         var retries: u16 = 0;
         while (i < am) : (i += 1) {
             self.nodes = @truncate(i);
-
             const x: u16 = @intCast(raylib.GetRandomValue(0, self.square-1));
             const y: u16 = @intCast(raylib.GetRandomValue(0, self.square-1));
             if (self.NodeLocateCoord(x, y) != null) {
@@ -177,23 +183,24 @@ pub const Board = struct {
                 //std.debug.print("Reached maximum retries {d}\n", .{i});
                 retries = 0;
             }
+            self.nodes += 1; //NOTE: Redundant until we're on the last iteration
         }
 
-        self.nodes = am;
+        std.debug.print("Placed {} nodes!\n", .{self.nodes});
     }
 
     pub fn DeleteUnreachableNodes(self: *Board) void {
         //Nuke all nodes w/o possible targets
-        var i: usize = 0;
+        var i: i32 = 0;
         while (i < self.nodes) : (i += 1) {
-            const up = self.NodeLocateDir(i, Direction.Down, false);
-            const right = self.NodeLocateDir(i, Direction.Right, true);
-            const down = self.NodeLocateDir(i, Direction.Down, true);
-            const left = self.NodeLocateDir(i, Direction.Right, false);
+            const up = self.NodeLocateDir(@intCast(i), Direction.Down, false);
+            const right = self.NodeLocateDir(@intCast(i), Direction.Right, true);
+            const down = self.NodeLocateDir(@intCast(i), Direction.Down, true);
+            const left = self.NodeLocateDir(@intCast(i), Direction.Right, false);
 
             if (up == null and right == null and down == null and left == null) {
-                self.DeleteNode(i);
-                if (i > 0) i -= 1;
+                self.DeleteNode(@intCast(i));
+                i -= 1;
             }
         }
     }
@@ -208,14 +215,15 @@ pub const Board = struct {
     }
 
     pub fn DeleteNodesById(self: *Board, id: u16) void {
-        var i: usize = 0;
+        var i: i32 = 0;
         while (i < self.nodes) : (i += 1) {
-            const n: *Node = &self.grid[i];
+            const n: *Node = &self.grid[@intCast(i)];
             if (n.id == id) {
-                self.DeleteNode(i);
-                if (i > 0) i -= 1;
+                self.DeleteNode(@intCast(i));
+                i -= 1;
             }
         }
+        std.debug.print("Down to {} nodes!\n", .{self.nodes});
     }
 
     pub fn GridApplyIdToId(self: *Board, old_id: u16, new_id: u16) void {
@@ -274,25 +282,8 @@ pub const Board = struct {
             }
 
             //Are we done?
-            //std.debug.print("\t", .{});
-            var id_cnt: usize = 0;
-            var ids: [globals.MaxNodes]struct{id:u16, cnt:u32} = undefined;
-            for (0..self.nodes) |i| {
-                var unique: bool = true;
-                for (0..id_cnt) |j| {
-                    if (ids[j].id == self.grid[i].id) {
-                        ids[j].cnt += 1;
-                        unique = false;
-                        break;
-                    }
-                }
-
-                if (unique) {
-                    ids[id_cnt].id = self.grid[i].id;
-                    ids[id_cnt].cnt = 1;
-                    id_cnt += 1;
-                }
-            }
+            var ids: [globals.MaxNodes]IdInfo = undefined;
+            const id_cnt: usize = self.CalculateRemainingIds(&ids);
 
             //std.debug.print("\n", .{});
             //for (0..id_cnt) |i| {
@@ -300,7 +291,7 @@ pub const Board = struct {
             //}
 
             //If we should've been done
-            if (prv_id_cnt == id_cnt) { //we've reached an impass due to either a distance issue or blocking edge
+            if (prv_id_cnt == id_cnt) { //we've reached an impass
                 //std.debug.print("Previous id count is equal to current!\n", .{});
                 if (distance_max != self.square) {
                     distance_max = self.square; //expand the max distance
@@ -316,25 +307,86 @@ pub const Board = struct {
         }
     }
 
+    pub fn CalculateRemainingIds(self: *Board, ids: *[globals.MaxNodes]IdInfo) usize {
+        var id_cnt: usize = 0;
+        //var ids: [globals.MaxNodes]struct{id:u16, cnt:u32} = undefined;
+        for (0..self.nodes) |i| {
+            var unique: bool = true;
+            for (0..id_cnt) |j| {
+                if (ids[j].id == self.grid[i].id) {
+                    ids[j].cnt += 1;
+                    unique = false;
+                    break;
+                }
+            }
+
+            if (unique) {
+                ids[id_cnt].id = self.grid[i].id;
+                ids[id_cnt].cnt = 1;
+                id_cnt += 1;
+            }
+        }
+
+        return id_cnt;
+    }
+
     //TODO: Options
     //      1. If spare nodes, attempt to add some that are far enough away from others
-    //      2. If no spares, attempt to move some nodes in an unbreaking direction
     //      3. If failed, delete the graph
 
-    //pub fn ResolveUnconnectedSubgraphs(self: *Board) void {
-    //    for (0..id_cnt) |i| {
-    //        if (ids[i].cnt <= @max((self.nodes / 5), 2)) { //delete any subgraph with less than 20% of nodes
-    //            self.DeleteNodesById(ids[i].id);
-    //            std.debug.print("Deleting\n", .{});
-    //            dealt_with = true; //one step is dealt with
-    //            break;
-    //        }
-    //    }
-    //}
+    pub fn ResolveUnconnectedSubgraphs(self: *Board) void {
+        var ids: [globals.MaxNodes]IdInfo = undefined;
+        var id_cnt = self.CalculateRemainingIds(&ids);
+        assert(id_cnt < globals.MaxNodes);
+
+        //Identify primary island
+        var big_id = ids[0].id;
+        var big_cnt = ids[0].cnt;
+        for (1..id_cnt) |i| {
+            if (ids[i].cnt >= big_cnt) {
+                big_id = ids[i].id; //Complaint: No destructuring structs?
+                big_cnt = ids[i].cnt;
+            }
+        }
+
+        //Begin by removing too small subgraphs
+        for (0..id_cnt) |i| if (ids[i].cnt <= @max((self.max_nodes / 10), 2)) self.DeleteNodesById(ids[i].id);
+        //Complaint: I got weird errors on 1-line for loops before, but now not?
+
+        id_cnt = self.CalculateRemainingIds(&ids);
+        //Add nodes if we have room
+        if (id_cnt > 1 and self.nodes < self.max_nodes) {
+            //for (0..id_cnt) |i| {
+            //    if (self.nodes >= self.max_nodes) break;
+            //    if (big_id == ids[i].id) continue;
+
+            //    for (0..self.nodes) |ni| {
+            //        const n: *Node = &self.grid[ni];
+            //        if (n.id != ids[i].id) continue;
+
+            //        var conRight = (n.connections.get(.Right) == .None);
+            //        var conDown = (n.connections.get(.Down) == .None); //ik there exists short circuiting, but ... eh never too safe
+            //        var conLeft = (self.NodeLocateDirUncrossed(ni, .Right, false) != null);
+            //        var conUp = (self.NodeLocateDirUncrossed(ni, .Down, false) != null);
+
+            //        var node_cand: *Node = &self.grid[self.nodes];
+
+            //        if (!conRight) {
+
+            //        } else if (!conDown) {
+
+            //        } else if (!conLeft) {
+
+            //        } else if (!conUp) {
+
+            //        }
+            //    }
+            //}
+        }
+    }
 
     //TODO:
-    //      1. Nodes that continue the same connection without branching clog info, remove them
-    //      2. Nodes should extend to right before their information
+    //      1. Nodes should extend to right before a crossing edge
 
     //pub fn SimplifyGraph(self: *Board) void { }
 
@@ -354,6 +406,27 @@ pub const Board = struct {
                 if (value < self.double_chance) {
                     n.connections.set(.Down, .Double);
                 }
+            }
+        }
+    }
+
+    pub fn EvaluateBridgeCounts(self: *Board) void {
+        for (0..self.nodes) |i| {
+            const n: *Node = &self.grid[i];
+
+            const r = n.connections.get(.Right);
+            const d = n.connections.get(.Down);
+
+            if (r != .None) {
+                n.bridges += @intFromEnum(r);
+                const rn = self.NodeLocateDir(i, .Right, true).?;
+                self.grid[rn].bridges += @intFromEnum(r);
+            }
+
+            if (d != .None) {
+                n.bridges += @intFromEnum(d);
+                const dn = self.NodeLocateDir(i, .Down, true).?;
+                self.grid[dn].bridges += @intFromEnum(d);
             }
         }
     }
@@ -439,8 +512,8 @@ pub const Board = struct {
             raylib.DrawCircle(pix_x, pix_y, @floatFromInt(node_rd), raylib.BLACK);
             raylib.DrawCircle(pix_x, pix_y, @as(f32, @floatFromInt(node_rd)) * 0.9, globals.bg_color);
 
-            //Draw the Bridge Count (TODO: Currently drawing the id)
-            const buf = [_:0]u8{'0'+@as(u8, @truncate(nd.id))};
+            //Draw the Bridge Count
+            const buf = [_:0]u8{'0'+@as(u8, @truncate(nd.bridges))}; //Complaint: I'm not a huge fan of repeatedly stacked @ for casting
             const txtPixSz = raylib.MeasureTextEx(raylib.GetFontDefault(), &buf, @as(f32, @floatFromInt(text_sz)), 0);
             raylib.DrawText(&buf, pix_x - @as(u16, @intFromFloat(txtPixSz.x/2)), pix_y - @as(u16, @intFromFloat(txtPixSz.y/2)), @intCast(text_sz), globals.tx_color);
 
