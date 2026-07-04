@@ -122,7 +122,7 @@ pub const Board = struct {
         self.DeleteUnreachableNodes(); //unreachable nodes should be reclaimed
 
         self.ConnectionStep(-1);
-        self.ResolveUnconnectedSubgraphs();
+        //self.ResolveUnconnectedSubgraphs();
         //self.RebuildDeletedNodes();
         //self.Simplify();
         self.SaltDoubles();
@@ -203,6 +203,7 @@ pub const Board = struct {
                 i -= 1;
             }
         }
+        std.debug.print("Pruned to {} nodes!\n", .{self.nodes});
     }
 
     pub fn DeleteNode(self: *Board, idx: usize) void {
@@ -355,33 +356,120 @@ pub const Board = struct {
 
         id_cnt = self.CalculateRemainingIds(&ids);
         //Add nodes if we have room
-        if (id_cnt > 1 and self.nodes < self.max_nodes) {
-            //for (0..id_cnt) |i| {
-            //    if (self.nodes >= self.max_nodes) break;
-            //    if (big_id == ids[i].id) continue;
+        if (id_cnt > 1) {
+            std.debug.print("Found {} ids!\n", .{id_cnt});
+            if (self.nodes < self.max_nodes) {
+                std.debug.print("Got room to reconnect!\n", .{});
+                for (0..id_cnt) |i| {
+                    if (self.nodes >= self.max_nodes) break;
+                    if (big_id == ids[i].id) continue;
 
-            //    for (0..self.nodes) |ni| {
-            //        const n: *Node = &self.grid[ni];
-            //        if (n.id != ids[i].id) continue;
+                    var reconnected: bool = false;
+                    for (0..self.nodes) |ni| {
+                        if (reconnected) break;
 
-            //        var conRight = (n.connections.get(.Right) == .None);
-            //        var conDown = (n.connections.get(.Down) == .None); //ik there exists short circuiting, but ... eh never too safe
-            //        var conLeft = (self.NodeLocateDirUncrossed(ni, .Right, false) != null);
-            //        var conUp = (self.NodeLocateDirUncrossed(ni, .Down, false) != null);
+                        const n: *Node = &self.grid[ni];
+                        if (n.id != ids[i].id) continue;
 
-            //        var node_cand: *Node = &self.grid[self.nodes];
+                        const conRight = (n.connections.get(.Right) != .None);
+                        const conDown = (n.connections.get(.Down) != .None);
+                        const conLeft = (self.NodeLocateDirUncrossed(ni, .Right, false) != null);
+                        const conUp = (self.NodeLocateDirUncrossed(ni, .Down, false) != null);
 
-            //        if (!conRight) {
+                        var node_cand: *Node = &self.grid[self.nodes];
+                        node_cand.id = n.id;
+                        node_cand.x = n.x;
+                        node_cand.y = n.y;
+                        node_cand.bridges = 99; //TODO: debugging
+                        node_cand.connections.set(.Right, .None);
+                        node_cand.connections.set(.Down, .None);
+                        self.nodes += 1;
 
-            //        } else if (!conDown) {
+                        //Go through available axi, and attempt to reconnect to biggest subgraph
+                        loop_node_axi: for ([_]struct{valid:bool, start:u16, end:i16, horz:bool, pos:bool}{ //Complaint: I think this labelling thing could be better
+                            .{.valid=!conRight, .start=n.x+1, .end=@intCast(self.square),       .horz=true, .pos=true}, //Complaint: cannot store ((n.x+1) .. self.square)
+                            .{.valid=!conLeft,  .start=0,     .end=@as(i16, @intCast(n.x)) - 1, .horz=true, .pos=false},
+                            .{.valid=!conDown,  .start=n.y+1, .end=@intCast(self.square),       .horz=false, .pos=true},
+                            .{.valid=!conUp,    .start=0,     .end=@as(i16, @intCast(n.y)) - 1, .horz=false, .pos=false},
+                        }) |args| {
+                            if (reconnected) break;
+                            if (!args.valid) continue;
 
-            //        } else if (!conLeft) {
+                            if (args.end < 0 or args.start == args.end or args.start > self.square) break; //not a valid range
 
-            //        } else if (!conUp) {
+                            //std.debug.print("{} to {}\n", .{args.start, args.end}); //Complaint: Cannot do reverse ranges, especially for 0
+                            for (args.start .. @intCast(args.end)) |p| { //Complaint: Can I change the type of the range?
+                                node_cand.x = if (args.horz) @truncate(p) else n.x; //move it along the chosen axis
+                                node_cand.y = if (args.horz) n.y else @truncate(p);
 
-            //        }
-            //    }
-            //}
+                                //Do we still connect back
+                                const tmp = self.NodeLocateDirUncrossed(ni, if (args.horz) .Right else .Down, args.pos);
+                                if (tmp == null or tmp.? != self.nodes-1) {
+                                    if (args.pos) { break; }
+                                    else continue; //Complaint: cannot do followup else's w/o curlies {}
+                                }
+
+                                for ([_]struct{dir:Direction, pos:bool}{
+                                    .{.dir=.Right, .pos=true},
+                                    .{.dir=.Right, .pos=false},
+                                    .{.dir=.Down, .pos=true},
+                                    .{.dir=.Down, .pos=false},
+                                }) |arg2| {
+                                    const oth = self.NodeLocateDirUncrossed(self.nodes-1, arg2.dir, arg2.pos);
+                                    //we've located a valid spot to connect the subgraphs and it isn't already overtaken
+                                    if (oth != null and self.grid[oth.?].id == big_id and self.grid[oth.?].connections.get(arg2.dir) == .None) {
+                                        //Connect subgraph to join point
+                                        if (args.pos) {
+                                            n.connections.set(if (args.horz) .Right else .Down, .Single);
+                                        } else {
+                                            node_cand.connections.set(if (args.horz) .Right else .Down, .Single);
+                                        }
+
+                                        std.debug.print("\nBased off {}, {}\n", .{n.x, n.y});
+                                        std.debug.print("{} {} {} {}\n", .{!conRight, !conDown, !conLeft, !conUp});
+                                        //Did we actually cut a bridge? If so, disregard new connection
+                                        //If we are cutting a bridge, inherit the bridge from target
+                                        const inh_dir: Direction = (if (args.horz) .Down else .Right);
+                                        const inh = self.NodeLocateDirUncrossed(self.nodes-1, inh_dir, false);
+                                        if (inh != null and self.grid[inh.?].id != big_id) break :loop_node_axi; //crossing ourselves, or someone else
+
+                                        if (inh != null and self.grid[inh.?].connections.get(inh_dir) != .None) {
+                                            std.debug.print("Inheritted @ ({}, {})\n", .{node_cand.x, node_cand.y});
+                                            node_cand.connections.set(inh_dir, self.grid[inh.?].connections.get(inh_dir));
+                                        } else { //Otherwise do connect
+                                            std.debug.print("Connected {s} {s} @ ({}, {})\n", .{
+                                                if (arg2.dir == .Right) "Right" else "Down",
+                                                if (arg2.pos) "True" else "False",
+                                                node_cand.x,
+                                                node_cand.y
+                                            });
+
+                                            if (arg2.pos) {
+                                                node_cand.connections.set(arg2.dir, .Single);
+                                            } else {
+                                                self.grid[oth.?].connections.set(arg2.dir, .Single);
+                                            }
+                                        }
+
+                                        //self.GridApplyIdToId(n.id, big_id);
+                                        reconnected = true;
+                                        break :loop_node_axi; //Complaint: better error message when missing colon
+                                    }
+                                }
+                            }
+                        }
+
+                        if (!reconnected) self.nodes -= 1;
+                    }
+                    if (!reconnected) {
+                        std.debug.print("Failed to reconnect this subgraph, deleting!\n", .{});
+                        self.DeleteNodesById(ids[i].id);
+                    }
+                }
+            } else { //no room to add anything
+                std.debug.print("Failed to connect due to lacking materials\n", .{});
+                for (0..id_cnt) |i| if (ids[i].id != big_id) self.DeleteNodesById(ids[i].id); //just delete the remaining
+            }
         }
     }
 
@@ -513,7 +601,7 @@ pub const Board = struct {
             raylib.DrawCircle(pix_x, pix_y, @as(f32, @floatFromInt(node_rd)) * 0.9, globals.bg_color);
 
             //Draw the Bridge Count
-            const buf = [_:0]u8{'0'+@as(u8, @truncate(nd.bridges))}; //Complaint: I'm not a huge fan of repeatedly stacked @ for casting
+            const buf = [_:0]u8{'0'+@as(u8, @truncate(nd.id))}; //Complaint: I'm not a huge fan of repeatedly stacked @ for casting
             const txtPixSz = raylib.MeasureTextEx(raylib.GetFontDefault(), &buf, @as(f32, @floatFromInt(text_sz)), 0);
             raylib.DrawText(&buf, pix_x - @as(u16, @intFromFloat(txtPixSz.x/2)), pix_y - @as(u16, @intFromFloat(txtPixSz.y/2)), @intCast(text_sz), globals.tx_color);
 

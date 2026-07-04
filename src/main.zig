@@ -20,11 +20,11 @@ pub fn main() !void {
 
     while (!raylib.WindowShouldClose()) {
         //NOTE: Mobile seems to handle interactions before the drawing better
-        if (raylib.IsKeyReleased(raylib.KEY_T)) board.ResolveUnconnectedSubgraphs();
-        if (raylib.IsKeyReleased(raylib.KEY_R)) board.SaltDoubles();
-        if (raylib.IsKeyReleased(raylib.KEY_E)) board.ConnectionStep(1);
-        if (raylib.IsKeyReleased(raylib.KEY_W)) board.ConnectionStep(4);
         if (raylib.IsKeyReleased(raylib.KEY_Q)) board.Generate(globals.DifficultyOptions.get(difficulty));
+        if (raylib.IsKeyReleased(raylib.KEY_W)) {
+            board.ResolveUnconnectedSubgraphs();
+            //TODO: There still remain chances for loops and crosses to happen, do a before an after view on this
+        }
 
         raylib.BeginDrawing();
             raylib.ClearBackground(globals.bg_color);
