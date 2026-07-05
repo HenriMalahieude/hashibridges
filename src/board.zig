@@ -35,6 +35,16 @@ pub const Board = struct {
 
     state : GameState = GameState.Ungenerated,
 
+    pub fn StaticCopyTo(from: *Board, to: *Board) void {
+        to.nodes = from.nodes;
+        to.max_nodes = from.nodes;
+        to.square = from.square;
+        to.double_chance = from.double_chance;
+        to.state = from.state;
+
+        for (0..from.nodes) |i| to.grid[i] = from.grid[i];
+    }
+
     fn NodeLocateCoord(self : *Board, x : u16, y : u16) ?usize {
         for (0..self.nodes) |i| {
             if (self.grid[i].x == x and self.grid[i].y == y) {
@@ -112,21 +122,33 @@ pub const Board = struct {
     }
 
     /// Generate a New Puzzle to be solved
-    pub fn Generate(self : *Board, settings : globals.DifficultySetting) void {
-        self.square = settings.Square;
-        self.double_chance = settings.DoubleChance;
+    pub fn Generate(self : *Board, settings : globals.DifficultySetting, other: *Board) void {
+        for (0..100) |_| {
+            //std.debug.print("\n\nNew Generation step!\n", .{});
+            self.square = settings.Square;
+            self.double_chance = settings.DoubleChance;
+            self.max_nodes = settings.Nodes;
 
-        self.PlaceNodes(settings.Nodes); //create the nodes of interest
-        self.max_nodes = settings.Nodes;
+            self.PlaceNodes(settings.Nodes-1); //create the nodes of interest, but leave room for connections
 
-        self.DeleteUnreachableNodes(); //unreachable nodes should be reclaimed
+            self.DeleteUnreachableNodes(); //unreachable nodes should be reclaimed
 
-        self.ConnectionStep(-1);
-        //self.ResolveUnconnectedSubgraphs();
-        //self.RebuildDeletedNodes();
-        //self.Simplify();
-        self.SaltDoubles();
-        self.EvaluateBridgeCounts();
+            self.ConnectionStep(-1);
+            self.StaticCopyTo(other);
+
+            self.ResolveUnconnectedSubgraphs();
+            self.RebuildDeletedNodes();
+            //self.Simplify();
+            self.SaltDoubles();
+            self.EvaluateBridgeCounts();
+
+            var ids: [globals.MaxNodes]IdInfo = undefined;
+            const id_cnt = self.CalculateRemainingIds(&ids);
+            if (id_cnt != 1) {
+                std.debug.print("Located a case of multi ids remaining after resolution step!\n", .{});
+                break;
+            }
+        }
     }
 
     //Create the nodes, cannot overlap or be within 1 dist from each other
@@ -186,7 +208,7 @@ pub const Board = struct {
             self.nodes += 1; //NOTE: Redundant until we're on the last iteration
         }
 
-        std.debug.print("Placed {} nodes!\n", .{self.nodes});
+        //std.debug.print("Placed {} nodes!\n", .{self.nodes});
     }
 
     pub fn DeleteUnreachableNodes(self: *Board) void {
@@ -203,7 +225,7 @@ pub const Board = struct {
                 i -= 1;
             }
         }
-        std.debug.print("Pruned to {} nodes!\n", .{self.nodes});
+        //std.debug.print("Pruned to {} nodes!\n", .{self.nodes});
     }
 
     pub fn DeleteNode(self: *Board, idx: usize) void {
@@ -224,7 +246,7 @@ pub const Board = struct {
                 i -= 1;
             }
         }
-        std.debug.print("Down to {} nodes!\n", .{self.nodes});
+        //std.debug.print("Down to {} nodes!\n", .{self.nodes});
     }
 
     pub fn GridApplyIdToId(self: *Board, old_id: u16, new_id: u16) void {
@@ -357,12 +379,17 @@ pub const Board = struct {
         id_cnt = self.CalculateRemainingIds(&ids);
         //Add nodes if we have room
         if (id_cnt > 1) {
-            std.debug.print("Found {} ids!\n", .{id_cnt});
+            //std.debug.print("Found {} ids!\n", .{id_cnt});
             if (self.nodes < self.max_nodes) {
-                std.debug.print("Got room to reconnect!\n", .{});
+                //std.debug.print("Got room to reconnect!\n", .{});
                 for (0..id_cnt) |i| {
-                    if (self.nodes >= self.max_nodes) break;
                     if (big_id == ids[i].id) continue;
+                    //std.debug.print("Attempting to reconnect {}\n", .{ids[i].id});
+                    if (self.nodes >= self.max_nodes) {
+                        //std.debug.print("Maximum nodes used, deleting self!\n", .{});
+                        self.DeleteNodesById(ids[i].id);
+                        continue;
+                    }
 
                     var reconnected: bool = false;
                     for (0..self.nodes) |ni| {
@@ -418,6 +445,14 @@ pub const Board = struct {
                                     const oth = self.NodeLocateDirUncrossed(self.nodes-1, arg2.dir, arg2.pos);
                                     //we've located a valid spot to connect the subgraphs and it isn't already overtaken
                                     if (oth != null and self.grid[oth.?].id == big_id and self.grid[oth.?].connections.get(arg2.dir) == .None) {
+                                        //std.debug.print("\nBased off {}, {}\n", .{n.x, n.y});
+                                        //std.debug.print("{} {} {} {}\n", .{!conRight, !conDown, !conLeft, !conUp});
+                                        //Did we actually cut a bridge? If so, disregard new connection
+                                        //If we are cutting a bridge, inherit the bridge from target
+                                        const inh_dir: Direction = (if (args.horz) .Down else .Right);
+                                        const inh = self.NodeLocateDirUncrossed(self.nodes-1, inh_dir, false);
+                                        if (inh != null and self.grid[inh.?].id != big_id) break :loop_node_axi; //crossing ourselves, or someone else
+
                                         //Connect subgraph to join point
                                         if (args.pos) {
                                             n.connections.set(if (args.horz) .Right else .Down, .Single);
@@ -425,24 +460,16 @@ pub const Board = struct {
                                             node_cand.connections.set(if (args.horz) .Right else .Down, .Single);
                                         }
 
-                                        std.debug.print("\nBased off {}, {}\n", .{n.x, n.y});
-                                        std.debug.print("{} {} {} {}\n", .{!conRight, !conDown, !conLeft, !conUp});
-                                        //Did we actually cut a bridge? If so, disregard new connection
-                                        //If we are cutting a bridge, inherit the bridge from target
-                                        const inh_dir: Direction = (if (args.horz) .Down else .Right);
-                                        const inh = self.NodeLocateDirUncrossed(self.nodes-1, inh_dir, false);
-                                        if (inh != null and self.grid[inh.?].id != big_id) break :loop_node_axi; //crossing ourselves, or someone else
-
                                         if (inh != null and self.grid[inh.?].connections.get(inh_dir) != .None) {
-                                            std.debug.print("Inheritted @ ({}, {})\n", .{node_cand.x, node_cand.y});
+                                            //std.debug.print("Inheritted @ ({}, {})\n", .{node_cand.x, node_cand.y});
                                             node_cand.connections.set(inh_dir, self.grid[inh.?].connections.get(inh_dir));
                                         } else { //Otherwise do connect
-                                            std.debug.print("Connected {s} {s} @ ({}, {})\n", .{
-                                                if (arg2.dir == .Right) "Right" else "Down",
-                                                if (arg2.pos) "True" else "False",
-                                                node_cand.x,
-                                                node_cand.y
-                                            });
+                                            //std.debug.print("Connected {s} {s} @ ({}, {})\n", .{
+                                            //    if (arg2.dir == .Right) "Right" else "Down",
+                                            //    if (arg2.pos) "True" else "False",
+                                            //    node_cand.x,
+                                            //    node_cand.y
+                                            //});
 
                                             if (arg2.pos) {
                                                 node_cand.connections.set(arg2.dir, .Single);
@@ -451,7 +478,7 @@ pub const Board = struct {
                                             }
                                         }
 
-                                        //self.GridApplyIdToId(n.id, big_id);
+                                        self.GridApplyIdToId(n.id, big_id);
                                         reconnected = true;
                                         break :loop_node_axi; //Complaint: better error message when missing colon
                                     }
@@ -462,12 +489,12 @@ pub const Board = struct {
                         if (!reconnected) self.nodes -= 1;
                     }
                     if (!reconnected) {
-                        std.debug.print("Failed to reconnect this subgraph, deleting!\n", .{});
+                        //std.debug.print("Failed to reconnect this subgraph, deleting!\n", .{});
                         self.DeleteNodesById(ids[i].id);
                     }
                 }
             } else { //no room to add anything
-                std.debug.print("Failed to connect due to lacking materials\n", .{});
+                //std.debug.print("Failed to connect due to lacking materials\n", .{});
                 for (0..id_cnt) |i| if (ids[i].id != big_id) self.DeleteNodesById(ids[i].id); //just delete the remaining
             }
         }
@@ -516,6 +543,49 @@ pub const Board = struct {
                 const dn = self.NodeLocateDir(i, .Down, true).?;
                 self.grid[dn].bridges += @intFromEnum(d);
             }
+        }
+    }
+
+    //Assumes we've already connected everything
+    fn RebuildDeletedNodes(self: *Board) void {
+        while (self.nodes < self.max_nodes) : (self.nodes += 1) {
+            var inserted: bool = false;
+            loop_retry: for (0..self.max_nodes) |_| { //select random node, attempt to split in another direction, max retries set to max nodes
+                const i: usize = @intCast(raylib.GetRandomValue(0, @intCast(self.nodes-1)));
+                const n: *Node = &self.grid[i];
+
+                const conRight = (n.connections.get(.Right) != .None);
+                const conDown = (n.connections.get(.Down) != .None);
+                const conLeft = (self.NodeLocateDirUncrossed(i, .Right, false) != null);
+                const conUp = (self.NodeLocateDirUncrossed(i, .Down, false) != null);
+
+                const node_cand: *Node = *self.grid[self.nodes];
+                node_cand.id = n.id;
+                node_cand.x = n.x;
+                node_cand.y = n.x;
+                node_cand.bridges = 0;
+                node_cand.connections.set(.Right, .None);
+                node_cand.connections.set(.Down, .None);
+                self.nodes += 1; //willed into existence
+
+                for ([_]enum{valid:bool, start:u16, end: i16, horz: bool, pos: bool} {
+                    .{.valid=!conRight, .start=(n.x+1), .end=@intCast(self.square), .horz=true, .pos=true},
+                    .{.valid=!conDown, .start=(n.y+1), .end=@intCast(self.square), .horz=false, .pos=true},
+                    .{.valid=!conLeft, .start=0, .end=@as(i16, @intCast(n.x))-1, .horz=true, .pos=false},
+                    .{.valid=!conUp, .start=0, .end=@as(i16, @intCast(n.y))-1, .horz=false, .pos=false},
+                }) |args| {
+                    if (!valid) continue;
+
+                    for (args.start .. args.end) |p| {
+                        node_cand.x = if (args.horz) p else n.x;
+                        node_cand.y = if (args.horz) n.y else p;
+
+                        //TODO
+                    }
+                }
+            }
+
+            if (!inserted) break; //we tried really hard, oh well
         }
     }
 
