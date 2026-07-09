@@ -28,9 +28,9 @@ pub const DifficultySetting = struct {
 
 pub const MaxNodes = DifficultyOptions.get(Difficulty.Crzy).Nodes;
 pub const DifficultyOptions = std.EnumArray(Difficulty, DifficultySetting).init(.{
-    .Easy = .{.Nodes = 10, .Square =  6, .DoubleChance = 20}, //aiming for a 30% filling of the board
-    .Medi = .{.Nodes = 30, .Square = 12, .DoubleChance = 40},
-    .Hard = .{.Nodes = 58, .Square = 14, .DoubleChance = 60},
+    .Easy = .{.Nodes = 10, .Square =  6, .DoubleChance = 40}, //aiming for a 30% filling of the board
+    .Medi = .{.Nodes = 30, .Square = 12, .DoubleChance = 50},
+    .Hard = .{.Nodes = 58, .Square = 14, .DoubleChance = 55},
     .Crzy = .{.Nodes = 76, .Square = 16, .DoubleChance = 60},
 });
 

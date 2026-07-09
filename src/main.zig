@@ -6,11 +6,11 @@ const Io = std.Io;
 
 //NOTE: [*c]T is the c pointer type
 
-var difficulty : globals.Difficulty = globals.Difficulty.Medi;
+var difficulty : globals.Difficulty = globals.Difficulty.Hard;
 
-var viewingPrimary: bool = true;
+//var viewingPrimary: bool = true;
 var board: boardImpl.Board = undefined;
-var board_bak: boardImpl.Board = undefined;
+//var board_bak: boardImpl.Board = undefined;
 
 //init : std.process.Init as input
 pub fn main() !void {
@@ -19,25 +19,16 @@ pub fn main() !void {
     std.debug.print("GAME: Initializing window of size {d} ^ 2\n", .{globals.window_square});
     raylib.InitWindow(globals.window_square, globals.window_square, "Test Window");
 
-    board.Generate(globals.DifficultyOptions.get(difficulty), &board_bak);
+    board.Generate(globals.DifficultyOptions.get(difficulty), null);
 
     while (!raylib.WindowShouldClose()) {
         //NOTE: Mobile seems to handle interactions before the drawing better
-        if (raylib.IsKeyReleased(raylib.KEY_Q)) {
-            board.Generate(globals.DifficultyOptions.get(difficulty), &board_bak);
-            viewingPrimary = true;
-        }
-        if (raylib.IsKeyReleased(raylib.KEY_W)) {
-            board.StaticCopyTo(&board_bak);
-            board.ResolveUnconnectedSubgraphs();
-        }
-        if (raylib.IsKeyReleased(raylib.KEY_E)) viewingPrimary = !viewingPrimary;
+        board.Interact();
 
         raylib.BeginDrawing();
             raylib.ClearBackground(globals.bg_color);
 
-            if (viewingPrimary) board.Draw()
-            else board_bak.Draw();
+            board.Draw(false);
         raylib.EndDrawing();
     }
 }

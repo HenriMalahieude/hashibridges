@@ -7,6 +7,10 @@ const raylib = globals.raylib;
 //Complaint: Somehow this isn't located within raylib.h even though it's in there?
 pub extern "c" fn DrawLineDashed(a: raylib.Vector2, b: raylib.Vector2, c: c_int, d: c_int, e: raylib.Color) void;
 
+///Pixel Size for Drawing
+const board_square: u32 = globals.window_square - globals.interface_margin;
+
+
 /// Represents the game state
 pub const Board = struct {
     const ConnectionType = enum { None, Single, Double };
@@ -18,6 +22,7 @@ pub const Board = struct {
         x : u16 = 0,
         y : u16 = 0,
         bridges: u8 = 0,
+        user_bridges: u8 = 0,
         connections : std.EnumArray(Direction, ConnectionType) = undefined,
         user_connections : std.EnumArray(Direction, ConnectionType) = undefined,
     };
@@ -27,6 +32,17 @@ pub const Board = struct {
         cnt: u32,
     };
 
+    //Pixel sizes
+    node_space: u32,
+    node_rd: u32,
+    brdg_sz: u32,
+    text_sz: u32,
+
+    //Center of the start locations in pixels
+    strt_x: u32,
+    strt_y: u32,
+
+    //Variables
     grid : [globals.MaxNodes] Node = undefined,
     nodes : u16 = 0,
     max_nodes : u16 = 0,
@@ -122,34 +138,65 @@ pub const Board = struct {
     }
 
     /// Generate a New Puzzle to be solved
-    pub fn Generate(self : *Board, settings : globals.DifficultySetting, other: *Board) void {
-        for (0..100) |_| {
-            //std.debug.print("\n\nNew Generation step!\n", .{});
-            self.square = settings.Square;
-            self.double_chance = settings.DoubleChance;
-            self.max_nodes = settings.Nodes;
+    pub fn Generate(self : *Board, settings : globals.DifficultySetting, other: ?*Board) void {
+        self.node_space = board_square / @as(u32, settings.Square); //in pix
+        self.node_rd = self.node_space / 4; //radius, leave some room for bridges
+        self.brdg_sz = self.node_rd / 4;
+        self.text_sz = self.node_space / 5;
 
+        //Center of the start locations in pixels
+        self.strt_x = (globals.interface_margin/2) + (self.node_space/2);
+        self.strt_y = (globals.interface_margin/2) + (self.node_space/2);
+        //std.debug.print("Board Sqr: {}, Node Rad: {}, Bridge Sz: {}, Txt Sz: {}, Strt ({}, {})\n", .{board_square, self.node_rd, self.brdg_sz, self.text_sz, self.strt_x, self.strt_y});
+
+        //Relevant info
+        self.nodes = 0;
+        self.square = settings.Square;
+        self.double_chance = settings.DoubleChance;
+        self.max_nodes = settings.Nodes;
+
+        while (self.nodes == 0) { //it can happen sometimes
             self.PlaceNodes(settings.Nodes-1); //create the nodes of interest, but leave room for connections
 
             self.DeleteUnreachableNodes(); //unreachable nodes should be reclaimed
 
             self.ConnectionStep(-1);
-            self.StaticCopyTo(other);
 
             self.ResolveUnconnectedSubgraphs();
-            self.RebuildDeletedNodes();
-            //self.Simplify();
-            self.SaltDoubles();
-            self.EvaluateBridgeCounts();
-
-            var ids: [globals.MaxNodes]IdInfo = undefined;
-            const id_cnt = self.CalculateRemainingIds(&ids);
-            if (id_cnt != 1) {
-                std.debug.print("Located a case of multi ids remaining after resolution step!\n", .{});
-                break;
-            }
         }
+
+        if (other != null) self.StaticCopyTo(other.?);
+
+        self.RebuildDeletedNodes();
+        //self.Simplify(); //TODO: Not really necessary
+        self.SaltDoubles();
+        self.EvaluateBridgeCounts(false);
     }
+
+    //test "TODO" {
+    //    for (0..100) |_| {
+    //        self.Generate();
+
+    //        for (0..self.nodes) |i| {
+    //            const n: *Node = &self.grid[i];
+    //            if (n.x >= self.square or n.y >= self.square) std.debug.print("? Node ({}, {}) outside of bounds ?", .{n.x, n.y});
+    //            break;
+    //        }
+
+    //        //if (self.nodes != self.max_nodes) std.debug.print("Grid was not full\n", .{})
+    //        //else std.debug.print("Grid is full!\n", .{});
+
+    //        var ids: [globals.MaxNodes]IdInfo = undefined;
+    //        const id_cnt = self.CalculateRemainingIds(&ids);
+    //        if (id_cnt != 1) {
+    //            std.debug.print("Nodes: {}\n", .{self.nodes});
+    //            std.debug.print("Located a case of multi ids remaining after resolution step! (i={})\n", .{outer});
+    //            for (ids[0..id_cnt]) |idinfo| std.debug.print("\t{} @ x{}\n", .{idinfo.id, idinfo.cnt});
+    //            break;
+    //        }
+    //    }
+        //if (outer == 99) std.debug.print("Everything fine\n", .{});
+    //};
 
     //Create the nodes, cannot overlap or be within 1 dist from each other
     pub fn PlaceNodes(self: *Board, am: u16) void {
@@ -400,14 +447,22 @@ pub const Board = struct {
 
                         const conRight = (n.connections.get(.Right) != .None);
                         const conDown = (n.connections.get(.Down) != .None);
-                        const conLeft = (self.NodeLocateDirUncrossed(ni, .Right, false) != null);
-                        const conUp = (self.NodeLocateDirUncrossed(ni, .Down, false) != null);
+                        const conLeft = bL: { //Complaint: I'd like to not have to label this tbh
+                            const leftNode = self.NodeLocateDirUncrossed(i, .Right, false) orelse break :bL false;
+                            if (self.grid[leftNode].connections.get(.Right) != .None) break :bL true;
+                            break :bL false;
+                        };
+                        const conUp = bU: {
+                            const upNode = self.NodeLocateDirUncrossed(i, .Down, false) orelse break :bU false;
+                            if (self.grid[upNode].connections.get(.Down) != .None) break :bU true;
+                            break :bU false;
+                        };
 
                         var node_cand: *Node = &self.grid[self.nodes];
                         node_cand.id = n.id;
                         node_cand.x = n.x;
                         node_cand.y = n.y;
-                        node_cand.bridges = 99; //TODO: debugging
+                        node_cand.bridges = 0;
                         node_cand.connections.set(.Right, .None);
                         node_cand.connections.set(.Down, .None);
                         self.nodes += 1;
@@ -525,7 +580,12 @@ pub const Board = struct {
         }
     }
 
-    pub fn EvaluateBridgeCounts(self: *Board) void {
+    pub fn EvaluateBridgeCounts(self: *Board, user: bool) void {
+        for (0..self.nodes) |i| {
+            if (!user) self.grid[i].bridges = 0
+            else self.grid[i].user_bridges = 0;
+        }
+
         for (0..self.nodes) |i| {
             const n: *Node = &self.grid[i];
 
@@ -535,31 +595,48 @@ pub const Board = struct {
             if (r != .None) {
                 n.bridges += @intFromEnum(r);
                 const rn = self.NodeLocateDir(i, .Right, true).?;
-                self.grid[rn].bridges += @intFromEnum(r);
+                if (!user) self.grid[rn].bridges += @intFromEnum(r)
+                else self.grid[rn].user_bridges += @intFromEnum(r);
             }
 
             if (d != .None) {
                 n.bridges += @intFromEnum(d);
                 const dn = self.NodeLocateDir(i, .Down, true).?;
-                self.grid[dn].bridges += @intFromEnum(d);
+                if (!user) self.grid[dn].bridges += @intFromEnum(d)
+                else self.grid[dn].user_bridges += @intFromEnum(d);
             }
         }
     }
 
     //Assumes we've already connected everything
     fn RebuildDeletedNodes(self: *Board) void {
-        while (self.nodes < self.max_nodes) : (self.nodes += 1) {
+        while (self.nodes < self.max_nodes) {
             var inserted: bool = false;
-            loop_retry: for (0..self.max_nodes) |_| { //select random node, attempt to split in another direction, max retries set to max nodes
-                const i: usize = @intCast(raylib.GetRandomValue(0, @intCast(self.nodes-1)));
+
+            loop_insert_retry:
+                for (0..self.nodes) |i| {
+                //const i: usize = @intCast(raylib.GetRandomValue(0, @intCast(self.nodes-1)));
                 const n: *Node = &self.grid[i];
 
                 const conRight = (n.connections.get(.Right) != .None);
                 const conDown = (n.connections.get(.Down) != .None);
-                const conLeft = (self.NodeLocateDirUncrossed(i, .Right, false) != null);
-                const conUp = (self.NodeLocateDirUncrossed(i, .Down, false) != null);
+                const conLeft = bL: { //Complaint: I'd like to not have to label this tbh
+                    const leftNode = self.NodeLocateDirUncrossed(i, .Right, false) orelse break :bL false;
+                    if (self.grid[leftNode].connections.get(.Right) != .None) break :bL true;
+                    break :bL false;
+                };
+                const conUp = bU: {
+                    const upNode = self.NodeLocateDirUncrossed(i, .Down, false) orelse break :bU false;
+                    if (self.grid[upNode].connections.get(.Down) != .None) break :bU true;
+                    break :bU false;
+                };
 
-                const node_cand: *Node = *self.grid[self.nodes];
+                if (!conRight and !conDown and !conLeft and !conUp) {
+                    //std.debug.print("({}, {}) could not be built off!\n", .{n.x, n.y});
+                    continue :loop_insert_retry;
+                }
+
+                const node_cand: *Node = &self.grid[self.nodes];
                 node_cand.id = n.id;
                 node_cand.x = n.x;
                 node_cand.y = n.x;
@@ -568,114 +645,184 @@ pub const Board = struct {
                 node_cand.connections.set(.Down, .None);
                 self.nodes += 1; //willed into existence
 
-                for ([_]enum{valid:bool, start:u16, end: i16, horz: bool, pos: bool} {
-                    .{.valid=!conRight, .start=(n.x+1), .end=@intCast(self.square), .horz=true, .pos=true},
-                    .{.valid=!conDown, .start=(n.y+1), .end=@intCast(self.square), .horz=false, .pos=true},
-                    .{.valid=!conLeft, .start=0, .end=@as(i16, @intCast(n.x))-1, .horz=true, .pos=false},
-                    .{.valid=!conUp, .start=0, .end=@as(i16, @intCast(n.y))-1, .horz=false, .pos=false},
+                for ([_]struct{valid:bool, start:u16, end: i16, horz: bool, pos: bool} {//Complaint: do I inline this or not? I do this to avoid repetition, but idk
+                    .{.valid=!conRight, .start=(n.x+globals.min_node_dist), .end=@intCast(self.square), .horz=true, .pos=true},
+                    .{.valid=!conDown, .start=(n.y+globals.min_node_dist), .end=@intCast(self.square), .horz=false, .pos=true},
+                    .{.valid=!conLeft, .start=0, .end=@as(i16, @intCast(n.x))-globals.min_node_dist, .horz=true, .pos=false},
+                    .{.valid=!conUp, .start=0, .end=@as(i16, @intCast(n.y))-globals.min_node_dist, .horz=false, .pos=false},
                 }) |args| {
-                    if (!valid) continue;
+                    //std.debug.print("Axi Testing: {}, {}, {} -> {}\n", .{args.horz, args.pos, args.start, args.end});
+                    if (!args.valid) continue;
+                    if (args.start >= self.square or args.end < 0 or args.start > args.end) continue;
 
-                    for (args.start .. args.end) |p| {
-                        node_cand.x = if (args.horz) p else n.x;
-                        node_cand.y = if (args.horz) n.y else p;
+                    loop_insert_axi: for (args.start .. @intCast(args.end)) |p| {
+                        node_cand.x = if (args.horz) @truncate(p) else n.x;
+                        node_cand.y = if (args.horz) n.y else @truncate(p);
 
-                        //TODO
+                        //Boundary check
+                        for (0..(self.nodes-1)) |j| {
+                            const tn: *Node = &self.grid[j];
+                            const diff_x = if (tn.x > node_cand.x) tn.x - node_cand.x else node_cand.x - tn.x;
+                            const diff_y = if (tn.y > node_cand.y) tn.y - node_cand.y else node_cand.y - tn.y;
+                            if ((diff_y <= globals.min_node_dist and diff_x == 0)
+                                or (diff_x <= globals.min_node_dist and diff_y == 0)) {
+                                //std.debug.print("Too close @ ({}, {})\n", .{node_cand.x, node_cand.y});
+                                continue :loop_insert_axi;
+                            }
+                        }
+
+                        //Connection Check
+                        const chk = self.NodeLocateDirUncrossed(i, if (args.horz) .Right else .Down, args.pos);
+                        if (chk == null or chk.? != (self.nodes-1)) {
+                            //std.debug.print("No connect @ ({}, {})\n", .{node_cand.x, node_cand.y});
+                            if (args.pos) break //means we can't continue anymore, for positive case
+                            else continue;
+                        }
+
+                        //Crossing/Inheritance Check
+                        const leftNode = self.NodeLocateDirUncrossed(self.nodes-1, .Right, false);
+                        const upNode = self.NodeLocateDirUncrossed(self.nodes-1, .Down, false);
+                        if ((leftNode != null and leftNode.? != i and !args.horz and self.grid[leftNode.?].connections.get(.Right) != .None)
+                                or (upNode != null and upNode.? != i and args.horz and self.grid[upNode.?].connections.get(.Down) != .None)) {
+                            //std.debug.print("Crossing @ ({}, {})\n", .{node_cand.x, node_cand.y});
+                            if (args.pos) break // we don't want to cross something
+                            else continue;
+                        }
+
+                        //Ambiguity Check (would make the graph hard to solve)
+                        const unconRight = ucR: {const rightNode = self.NodeLocateDirUncrossed(self.nodes-1, .Right, true); break :ucR (rightNode != null and rightNode != i);};
+                        const unconLeft = (leftNode != null and leftNode != i);
+                        const unconDown = ucD: {const downNode = self.NodeLocateDirUncrossed(self.nodes-1, .Down, true); break :ucD (downNode != null and downNode != i);};
+                        const unconUp = (upNode != null and upNode != i);
+
+                        if (unconRight or unconLeft or unconDown or unconUp) {
+                            //std.debug.print("Ambiguous @ ({}, {})\n", .{node_cand.x, node_cand.y});
+                            continue;
+                        }
+
+                        //Great News we can insert this one
+                        //std.debug.print("Based off ({}, {})\n", .{n.x, n.y});
+                        //std.debug.print("{s}, {}, {}, {s}, {s}\n", .{
+                        //    if (args.valid) "True" else "False",
+                        //    args.start,
+                        //    args.end,
+                        //    if (args.horz) "Horz" else "Vert",
+                        //    if (args.pos) "True" else "False",
+                        //});
+                        //std.debug.print("Inserted at ({}, {})\n\n", .{node_cand.x, node_cand.y});
+                        inserted = true;
+                        if (args.pos) {
+                            n.connections.set(if (args.horz) .Right else .Down, .Single);
+                        } else {
+                            node_cand.connections.set(if (args.horz) .Right else .Down, .Single);
+                        }
+
+                        break :loop_insert_retry;
                     }
+                    //std.debug.print("Axi V:{}, P:{} not possible !\n", .{args.horz, args.pos});
                 }
+                //std.debug.print("({}, {}) failed to locate a valid position on axi R:{}, L:{}, D:{}, U:{}!\n", .{n.x, n.y, !conRight, !conLeft, !conDown, !conUp});
+                self.nodes -= 1; //didn't insert, delete it
             }
 
-            if (!inserted) break; //we tried really hard, oh well
+            if (!inserted) {
+                break; //we tried really hard, but oh well
+            }
         }
     }
 
-    /// Draw the Screen using Raylib
-    pub fn Draw(self : *Board) void {
-        const board_square: u32 = globals.window_square - globals.interface_margin;
-        const node_space: u32 = board_square / @as(u32, self.square); //in pix
-        const node_rd: u32 = node_space / 4; //radius, leave some room for bridges
-        const brdg_sz: u32 = node_rd / 4;
-        const text_sz: u32 = node_space / 5;
-
-        //center of the start locations
-        const strt_x: u32 = (globals.interface_margin/2) + (node_space/2);
-        const strt_y: u32 = (globals.interface_margin/2) + (node_space/2);
-
-        //Draw the Grid first
+    pub fn DrawGrid(self: *Board) void {
         for (0..self.square) |i| {
-            const delta = @as(u32, @truncate(i)) * node_space;
+            const delta = @as(u32, @truncate(i)) * self.node_space;
 
             const rg_start: raylib.Vector2 = .{
-                .x=@floatFromInt(strt_x),
-                .y=@floatFromInt(strt_y+delta),
+                .x=@floatFromInt(self.strt_x),
+                .y=@floatFromInt(self.strt_y+delta),
             };
             const cg_start: raylib.Vector2 = .{
-                .x=@floatFromInt(strt_x+delta),
-                .y=@floatFromInt(strt_y),
+                .x=@floatFromInt(self.strt_x+delta),
+                .y=@floatFromInt(self.strt_y),
             };
 
             const rg_end: raylib.Vector2 = .{
-                .x=@floatFromInt(strt_x + board_square - node_space),
+                .x=@floatFromInt(self.strt_x + board_square - self.node_space),
                 .y=rg_start.y,
             };
             const cg_end: raylib.Vector2 = .{
                 .x=cg_start.x,
-                .y=@floatFromInt(strt_y + board_square - node_space),
+                .y=@floatFromInt(self.strt_y + board_square - self.node_space),
             };
             DrawLineDashed(rg_start, rg_end, 2, 2, raylib.GRAY);
             DrawLineDashed(cg_start, cg_end, 2, 2, raylib.GRAY);
         }
+    }
 
+    pub fn DrawBridges(self: *Board, user: bool, col: raylib.Color) void {
         for (0..self.nodes) |i| {
             const nd: *Node = &self.grid[i];
+            const conArr = if (user) &nd.user_connections else &nd.connections;
 
-            const pix_x: c_int = @intCast(strt_x + nd.x * node_space - (brdg_sz/2));
-            const pix_y: c_int = @intCast(strt_y + nd.y * node_space - (brdg_sz/2));
+            const pix_x: c_int = @intCast(self.strt_x + nd.x * self.node_space - (self.brdg_sz/2));
+            const pix_y: c_int = @intCast(self.strt_y + nd.y * self.node_space - (self.brdg_sz/2));
 
-            if (nd.connections.get(Direction.Right) == ConnectionType.Single) {
-                const oidx: usize = self.NodeLocateDir(i, Direction.Right, true) orelse unreachable;
+            //Rightwards
+            if (conArr.get(.Right) == .Single) {
+                const oidx: usize = self.NodeLocateDir(i, .Right, true).?;
                 const dist = @abs(self.grid[oidx].x - nd.x);
 
-                raylib.DrawRectangle(pix_x, pix_y, @intCast(node_space*dist), @intCast(brdg_sz), raylib.BLACK);
-            } else if (nd.connections.get(Direction.Right) == ConnectionType.Double) {
-                const oidx: usize = self.NodeLocateDir(i, Direction.Right, true) orelse unreachable;
+                raylib.DrawRectangle(pix_x, pix_y, @intCast(self.node_space*dist), @intCast(self.brdg_sz), col);
+            } else if (conArr.get(.Right) == .Double) {
+                const oidx: usize = self.NodeLocateDir(i, .Right, true).?;
                 const dist = @abs(self.grid[oidx].x - nd.x);
 
-                raylib.DrawRectangle(pix_x, pix_y+@as(c_int, @intCast(brdg_sz*1)), @intCast(node_space*dist), @intCast(brdg_sz), raylib.BLACK);
-                raylib.DrawRectangle(pix_x, pix_y-@as(c_int, @intCast(brdg_sz*1)), @intCast(node_space*dist), @intCast(brdg_sz), raylib.BLACK);
+                raylib.DrawRectangle(pix_x, pix_y+@as(c_int, @intCast(self.brdg_sz*1)), @intCast(self.node_space*dist), @intCast(self.brdg_sz), col);
+                raylib.DrawRectangle(pix_x, pix_y-@as(c_int, @intCast(self.brdg_sz*1)), @intCast(self.node_space*dist), @intCast(self.brdg_sz), col);
             }
 
-            if (nd.connections.get(Direction.Down) == ConnectionType.Single) {
-                const oidx: usize = self.NodeLocateDir(i, Direction.Down, true) orelse unreachable;
+            //Downwards
+            if (conArr.get(.Down) == .Single) {
+                const oidx: usize = self.NodeLocateDir(i, .Down, true).?;
                 const dist = @abs(self.grid[oidx].y - nd.y);
 
-                raylib.DrawRectangle(pix_x, pix_y, @intCast(brdg_sz), @intCast(node_space*dist), raylib.BLACK);
-            } else if (nd.connections.get(Direction.Down) == ConnectionType.Double) {
-                const oidx: usize = self.NodeLocateDir(i, Direction.Down, true) orelse unreachable;
+                raylib.DrawRectangle(pix_x, pix_y, @intCast(self.brdg_sz), @intCast(self.node_space*dist), col);
+            } else if (conArr.get(.Down) == .Double) {
+                const oidx: usize = self.NodeLocateDir(i, .Down, true).?;
                 const dist = @abs(self.grid[oidx].y - nd.y);
 
-                raylib.DrawRectangle(pix_x+@as(c_int, @intCast(brdg_sz*1)), pix_y, @intCast(brdg_sz), @intCast(node_space*dist), raylib.BLACK);
-                raylib.DrawRectangle(pix_x-@as(c_int, @intCast(brdg_sz*1)), pix_y, @intCast(brdg_sz), @intCast(node_space*dist), raylib.BLACK);
+                raylib.DrawRectangle(pix_x+@as(c_int, @intCast(self.brdg_sz*1)), pix_y, @intCast(self.brdg_sz), @intCast(self.node_space*dist), col);
+                raylib.DrawRectangle(pix_x-@as(c_int, @intCast(self.brdg_sz*1)), pix_y, @intCast(self.brdg_sz), @intCast(self.node_space*dist), col);
             }
 
         }
+    }
 
+    pub fn DrawNodes(self: *Board) void {
         for (0..self.nodes) |i| {
             const nd: *Node = &self.grid[i];
 
-            const pix_x: c_int = @intCast(strt_x + nd.x * node_space);
-            const pix_y: c_int = @intCast(strt_y + nd.y * node_space);
+            const pix_x: c_int = @intCast(self.strt_x + nd.x * self.node_space);
+            const pix_y: c_int = @intCast(self.strt_y + nd.y * self.node_space);
 
             //Draw the Node
-            raylib.DrawCircle(pix_x, pix_y, @floatFromInt(node_rd), raylib.BLACK);
-            raylib.DrawCircle(pix_x, pix_y, @as(f32, @floatFromInt(node_rd)) * 0.9, globals.bg_color);
+            const col = if (nd.user_bridges < nd.bridges) raylib.BLACK else (if (nd.user_bridges == nd.bridges) raylib.DARKGREEN else raylib.RED);
+            raylib.DrawCircle(pix_x, pix_y, @floatFromInt(self.node_rd), col);
+            raylib.DrawCircle(pix_x, pix_y, @as(f32, @floatFromInt(self.node_rd)) * 0.9, globals.bg_color);
 
             //Draw the Bridge Count
-            const buf = [_:0]u8{'0'+@as(u8, @truncate(nd.id))}; //Complaint: I'm not a huge fan of repeatedly stacked @ for casting
-            const txtPixSz = raylib.MeasureTextEx(raylib.GetFontDefault(), &buf, @as(f32, @floatFromInt(text_sz)), 0);
-            raylib.DrawText(&buf, pix_x - @as(u16, @intFromFloat(txtPixSz.x/2)), pix_y - @as(u16, @intFromFloat(txtPixSz.y/2)), @intCast(text_sz), globals.tx_color);
-
+            const buf = [_:0]u8{'0'+@as(u8, @truncate(nd.bridges))}; //Complaint: I'm not a huge fan of repeatedly stacked @ for casting
+            const txtPixSz = raylib.MeasureTextEx(raylib.GetFontDefault(), &buf, @as(f32, @floatFromInt(self.text_sz)), 0);
+            raylib.DrawText(&buf, pix_x - @as(u16, @intFromFloat(txtPixSz.x/2)), pix_y - @as(u16, @intFromFloat(txtPixSz.y/2)), @intCast(self.text_sz), globals.tx_color);
         }
+    }
+
+    /// Draw the Screen using Raylib
+    pub fn Draw(self : *Board, reveal: bool) void {
+        self.DrawGrid(); //Draw the Grid first
+
+        if (reveal) self.DrawBridges(false, raylib.GREEN);
+        self.DrawBridges(true, if (!reveal) raylib.BLACK else raylib.RED);
+
+        self.DrawNodes();
     }
 
     /// Interact with the board using Raylib
