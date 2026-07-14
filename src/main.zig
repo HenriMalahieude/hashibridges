@@ -2,11 +2,11 @@ const std = @import("std");
 const globals = @import("./globals.zig");
 const boardImpl = @import("./board.zig");
 const raylib = globals.raylib;
+const raygui = globals.raygui;
 const Io = std.Io;
 
 //NOTE: [*c]T is the c pointer type
 
-var difficulty : globals.Difficulty = globals.Difficulty.Hard;
 
 //var viewingPrimary: bool = true;
 var board: boardImpl.Board = undefined;
@@ -16,10 +16,16 @@ var board: boardImpl.Board = undefined;
 pub fn main() !void {
     //const arena: std.mem.Allocator = init.arena.allocator();
 
+    //Complaint: For some reason NONE OF THESE WORK
+    //raygui.setStyle(.default, .{.default=.text_size}, @intCast(globals.interface_font_sz));
+    //raygui.setStyle(.button, .{.control=.text_color_normal}, raylib.colorToInt(raylib.Color.black));
+    //raygui.setStyle(.button, .{.control=.text_color_focused}, raylib.colorToInt(raylib.Color.gray));
+    //raygui.setStyle(.button, .{.control=.text_color_pressed}, 0xFFFFFF);
+
     std.debug.print("GAME: Initializing window of size {d} ^ 2\n", .{globals.window_square});
     raylib.initWindow(globals.window_square, globals.window_square, "Test Window");
 
-    board.Generate(globals.DifficultyOptions.get(difficulty), null);
+    board.Generate(globals.DifficultyOptions.get(globals.difficulty), null);
 
     while (!raylib.windowShouldClose()) {
         //NOTE: Mobile seems to handle interactions before the drawing better
@@ -28,7 +34,7 @@ pub fn main() !void {
         raylib.beginDrawing();
             raylib.clearBackground(globals.bg_color);
 
-            board.Draw(false);
+            board.Draw();
         raylib.endDrawing();
     }
 }

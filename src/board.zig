@@ -3,6 +3,7 @@ const assert = std.debug.assert;
 
 const globals = @import("globals.zig");
 const raylib = globals.raylib;
+const raygui = globals.raygui;
 
 //Complaint: Somehow this isn't located within raylib.h even though it's in there?
 //pub extern "c" fn DrawLineDashed(a: raylib.Vector2, b: raylib.Vector2, c: c_int, d: c_int, e: raylib.Color) void;
@@ -50,6 +51,7 @@ pub const Board = struct {
     double_chance: u16 = 0,
 
     state : GameState = GameState.Ungenerated,
+    revealed: bool = false,
 
     pub fn StaticCopyTo(from: *Board, to: *Board) void {
         to.nodes = from.nodes;
@@ -837,17 +839,112 @@ pub const Board = struct {
     }
 
     /// Draw the Screen using Raylib
-    pub fn Draw(self : *Board, reveal: bool) void {
+    pub fn Draw(self : *Board) void {
         self.DrawGrid(); //Draw the Grid first
 
-        if (reveal) self.DrawBridges(false, raylib.Color.green);
-        self.DrawBridges(true, if (!reveal) raylib.Color.black else raylib.Color.red);
+        if (self.revealed) self.DrawBridges(false, raylib.Color.green);
+        self.DrawBridges(true, if (!self.revealed) raylib.Color.black else raylib.Color.red);
 
         self.DrawNodes();
     }
 
     /// Interact with the board using Raylib
-    pub fn Interact(self : *Board) void {
-        _ = self;
+    pub fn Interact(self: *Board) void {
+        self.DrawInterface();
+    }
+
+    fn DrawInterface(self : *Board) void {
+        const icon_sz: i16 = 2; //per pixel of the 16x16 image
+        const icon_pad: i16 = (@as(i16, @intCast(globals.interface_button_sz)) - (icon_sz*16)) / 2;
+
+        //Regenerate the Board
+        const restart_rect = raylib.Rectangle{
+            .x = globals.window_square - globals.interface_button_sz - globals.interface_padding,
+            .y = globals.interface_padding,
+            .width = globals.interface_button_sz,
+            .height = globals.interface_button_sz,
+        };
+        const regen = raygui.button(restart_rect, "");
+        raygui.drawIcon(211, restart_rect.x+icon_pad, restart_rect.y+icon_pad, icon_sz, raylib.Color.black);
+
+        //Change the difficulty
+        var dfc_rect = raylib.Rectangle{
+            .x = globals.interface_padding,
+            .y = globals.window_square - globals.interface_button_sz - globals.interface_padding,
+            .width = globals.interface_button_sz,
+            .height = globals.interface_button_sz,
+        };
+
+        const easy_tsz = raylib.measureText("Easy", globals.interface_font_sz);
+        dfc_rect.width = @floatFromInt(easy_tsz + (icon_pad));
+        const easy_btn = raygui.button(dfc_rect, "Easy");
+
+        const medi_tsz = raylib.measureText("Medium", globals.interface_font_sz);
+        dfc_rect.x += dfc_rect.width + globals.interface_padding;
+        dfc_rect.width = @floatFromInt(medi_tsz + (icon_pad));
+        const medi_btn = raygui.button(dfc_rect, "Medium");
+
+        const hard_tsz = raylib.measureText("Hard", globals.interface_font_sz);
+        dfc_rect.x += dfc_rect.width + globals.interface_padding;
+        dfc_rect.width = @floatFromInt(hard_tsz + (icon_pad));
+        const hard_btn = raygui.button(dfc_rect, "Hard");
+
+        const crzy_tsz = raylib.measureText("Crazy", globals.interface_font_sz);
+        dfc_rect.x += dfc_rect.width + globals.interface_padding;
+        dfc_rect.width = @floatFromInt(crzy_tsz + (icon_pad));
+        const crzy_btn = raygui.button(dfc_rect, "Crazy");
+
+        if      (easy_btn) globals.difficulty = .Easy
+        else if (medi_btn) globals.difficulty = .Medi
+        else if (hard_btn) globals.difficulty = .Hard
+        else if (crzy_btn) globals.difficulty = .Crzy;
+
+        if (regen or easy_btn or medi_btn or hard_btn or crzy_btn) {
+            self.revealed = false;
+            self.Generate(globals.DifficultyOptions.get(globals.difficulty), null);
+        }
+
+        dfc_rect.x = globals.window_square - globals.interface_button_sz - globals.interface_padding;
+        dfc_rect.width = globals.interface_button_sz;
+        const reveal = raygui.button(dfc_rect, "");
+
+        //Complaint: Selective casting needed?
+        const eyeCon = if (self.revealed) raygui.IconName.eye_on else raygui.IconName.eye_off;
+        raygui.drawIcon(@intFromEnum(eyeCon), @as(i32, @intFromFloat(dfc_rect.x))+icon_pad, @as(i32, @intFromFloat(dfc_rect.y))+icon_pad, icon_sz, raylib.Color.black);
+        if (reveal) self.revealed = !self.revealed;
+
+        dfc_rect.x -= globals.interface_button_sz + globals.interface_padding;
+        const hint = raygui.button(dfc_rect, "");
+        raygui.drawIcon(@intFromEnum(raygui.IconName.help), @as(i32, @intFromFloat(dfc_rect.x))+icon_pad, @as(i32, @intFromFloat(dfc_rect.y))+icon_pad, icon_sz, raylib.Color.black);
+
+        if (hint) { //surprisingly much easier than I thought
+            for (self.grid[0..self.nodes]) |*n| {
+                const user_c_r = n.user_connections.get(.Right);
+                const trth_c_r = n.connections.get(.Right);
+
+                const user_c_d = n.user_connections.get(.Down);
+                const trth_c_d = n.connections.get(.Down);
+
+                if (user_c_r != trth_c_r) {
+                    if (user_c_r == .None) n.user_connections.set(.Right, .Single)
+                    else if (user_c_r == .Single) switch (trth_c_r) {
+                        .None => n.user_connections.set(.Right, .None),
+                        .Single => unreachable,
+                        .Double => n.user_connections.set(.Right, .Double),
+                    } else n.user_connections.set(.Right, .Single);
+                    break;
+                }
+
+                if (user_c_d != trth_c_d) {
+                    if (user_c_d == .None) n.user_connections.set(.Down, .Single)
+                    else if (user_c_d == .Single) switch (trth_c_d) {
+                        .None => n.user_connections.set(.Down, .None),
+                        .Single => unreachable,
+                        .Double => n.user_connections.set(.Down, .Double),
+                    } else n.user_connections.set(.Down, .Single);
+                    break;
+                }
+            }
+        }
     }
 };

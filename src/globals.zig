@@ -6,6 +6,9 @@ pub const raygui = @import("raygui");
 /// Interface constants
 pub const window_square: u16 = 800; // Width and Height
 pub const interface_margin: u16 = 100; // Margin around the board
+pub const interface_button_sz: u16 = interface_margin / 3;
+pub const interface_padding: u16 = 5;
+pub const interface_font_sz: u16 = 16;
 
 pub const max_board_square: u16 = 20;
 pub const min_node_dist: u16 = 1; //between nodes there must be N empty spaces
@@ -26,6 +29,8 @@ pub const DifficultySetting = struct {
     Square: u16,
     DoubleChance: u16, //between 0 and 100
 };
+
+pub var difficulty : Difficulty = Difficulty.Hard;
 
 pub const MaxNodes = DifficultyOptions.get(Difficulty.Crzy).Nodes;
 pub const DifficultyOptions = std.EnumArray(Difficulty, DifficultySetting).init(.{
