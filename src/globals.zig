@@ -1,6 +1,7 @@
 const std = @import("std");
 
-pub const raylib = @cImport(@cInclude("raylib.h"));
+pub const raylib = @import("raylib");
+pub const raygui = @import("raygui");
 
 /// Interface constants
 pub const window_square: u16 = 800; // Width and Height
@@ -10,8 +11,8 @@ pub const max_board_square: u16 = 20;
 pub const min_node_dist: u16 = 1; //between nodes there must be N empty spaces
 //pub const max_node_retry: u16 = 10; //maximum amount of times a node will retry when failing the distance check
 
-pub const bg_color = raylib.WHITE;
-pub const tx_color = raylib.BLACK;
+pub const bg_color = raylib.Color.white;
+pub const tx_color = raylib.Color.black;
 
 pub const Difficulty = enum {
     Easy,

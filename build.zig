@@ -3,30 +3,31 @@ const std = @import("std");
 //const raylib_header = "~/Desktop/raylib/src/";
 
 pub fn build(b: *std.Build) !void {
-    const raylib_dir = b.option([] const u8, "raylib_dir", "Location of the raylib source including the header") orelse "~/Desktop/raylib/src/";
-
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    //Raylib stuff
+    const raylib_dep = b.dependency("raylib_zig", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const raylib = raylib_dep.module("raylib"); // main raylib module
+    const raygui = raylib_dep.module("raygui"); // raygui module
+    const raylib_artifact = raylib_dep.artifact("raylib"); // raylib C library
 
     const exe = b.addExecutable(.{
         .name = "hashibridges",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
-            //.target = b.resolveTargetQuery(.{
-            //    .os_tag = if (windows) .windows else null,
-
             .target = target,
             .optimize = optimize,
-            .link_libc = true,
         }),
     });
 
-    //Raylib stuff
-    const rel_path = std.Build.LazyPath{ .cwd_relative = raylib_dir }; //construct relative from absolute
-    exe.root_module.addIncludePath(rel_path); //header
-
-    const lib_to_use = if (target.result.cpu.arch.isWasm()) "libs/web/libraylib.a" else "libs/desktop/libraylib.a";
-    exe.root_module.addObjectFile(b.path(lib_to_use));
+    exe.root_module.linkLibrary(raylib_artifact);
+    exe.root_module.addImport("raylib", raylib);
+    exe.root_module.addImport("raygui", raygui);
 
     //Raylib dependencies
     if (target.result.os.tag == std.Target.Os.Tag.linux) {

@@ -5,32 +5,32 @@ const globals = @import("globals.zig");
 const raylib = globals.raylib;
 
 //Complaint: Somehow this isn't located within raylib.h even though it's in there?
-pub extern "c" fn DrawLineDashed(a: raylib.Vector2, b: raylib.Vector2, c: c_int, d: c_int, e: raylib.Color) void;
+//pub extern "c" fn DrawLineDashed(a: raylib.Vector2, b: raylib.Vector2, c: c_int, d: c_int, e: raylib.Color) void;
 
 ///Pixel Size for Drawing
 const board_square: u32 = globals.window_square - globals.interface_margin;
 
+const ConnectionType = enum(u8) { None=0, Single=1, Double=2 };
+const GameState = enum { Ungenerated, Running, Complete };
+const Direction = enum { Right, Down }; //no need to store duplicate information
+
+const Node = struct {
+    id: u16 = 0,
+    x : u16 = 0,
+    y : u16 = 0,
+    bridges: u8 = 0,
+    user_bridges: u8 = 0,
+    connections : std.EnumArray(Direction, ConnectionType) = undefined,
+    user_connections : std.EnumArray(Direction, ConnectionType) = undefined,
+};
+
+const IdInfo = struct { //Complaint: Apparently zig cannot recognize anonymous structs that are the same....
+    id: u16,
+    cnt: u32,
+};
 
 /// Represents the game state
 pub const Board = struct {
-    const ConnectionType = enum { None, Single, Double };
-    const GameState = enum { Ungenerated, Running, Complete };
-    const Direction = enum { Right, Down }; //no need to store duplicate information
-
-    const Node = struct {
-        id: u16 = 0,
-        x : u16 = 0,
-        y : u16 = 0,
-        bridges: u8 = 0,
-        user_bridges: u8 = 0,
-        connections : std.EnumArray(Direction, ConnectionType) = undefined,
-        user_connections : std.EnumArray(Direction, ConnectionType) = undefined,
-    };
-
-    const IdInfo = struct { //Complaint: Apparently zig cannot recognize anonymous structs that are the same....
-        id: u16,
-        cnt: u32,
-    };
 
     //Pixel sizes
     node_space: u32,
@@ -155,6 +155,17 @@ pub const Board = struct {
         self.double_chance = settings.DoubleChance;
         self.max_nodes = settings.Nodes;
 
+        //This was caught by zig, even if by accident actually really goated
+        //Zero Initialization for everything that we couldn't initialize in the defaults
+        for (0..self.max_nodes) |i| {
+            const n: *Node = &self.grid[i];
+            n.connections.set(.Right, .None);
+            n.connections.set(.Down, .None);
+
+            n.user_connections.set(.Right, .None);
+            n.user_connections.set(.Down, .None);
+        }
+
         while (self.nodes == 0) { //it can happen sometimes
             self.PlaceNodes(settings.Nodes-1); //create the nodes of interest, but leave room for connections
 
@@ -171,6 +182,7 @@ pub const Board = struct {
         //self.Simplify(); //TODO: Not really necessary
         self.SaltDoubles();
         self.EvaluateBridgeCounts(false);
+        self.EvaluateBridgeCounts(true);
     }
 
     //test "TODO" {
@@ -204,8 +216,8 @@ pub const Board = struct {
         var retries: u16 = 0;
         while (i < am) : (i += 1) {
             self.nodes = @truncate(i);
-            const x: u16 = @intCast(raylib.GetRandomValue(0, self.square-1));
-            const y: u16 = @intCast(raylib.GetRandomValue(0, self.square-1));
+            const x: u16 = @intCast(raylib.getRandomValue(0, self.square-1));
+            const y: u16 = @intCast(raylib.getRandomValue(0, self.square-1));
             if (self.NodeLocateCoord(x, y) != null) {
                 if (i != 0) i -= 1;
                 continue;
@@ -224,6 +236,8 @@ pub const Board = struct {
                     .Right = ConnectionType.None,
                     .Down = ConnectionType.None,
                 }),
+                .bridges = 0,
+                .user_bridges = 0,
             };
 
             if (retries < (am/2)) {
@@ -341,7 +355,7 @@ pub const Board = struct {
                 if (right == null and down == null) continue; //node irrelevant
 
 
-                const horz: bool = (raylib.GetRandomValue(0, 1) == 1);
+                const horz: bool = (raylib.getRandomValue(0, 1) == 1);
                 if ((horz or down == null) and right != null) {
                     n.connections.set(Direction.Right, ConnectionType.Single);
                     self.GridApplyIdToId(self.grid[right.?].id, n.id);
@@ -565,14 +579,14 @@ pub const Board = struct {
         for (0..self.nodes) |i| {
             const n: *Node = &self.grid[i];
             if (n.connections.get(.Right) != .None) {
-                const value = raylib.GetRandomValue(0, 100);
+                const value = raylib.getRandomValue(0, 100);
                 if (value < self.double_chance) {
                     n.connections.set(.Right, .Double);
                 }
             }
 
             if (n.connections.get(.Down) != .None) {
-                const value = raylib.GetRandomValue(0, 100);
+                const value = raylib.getRandomValue(0, 100);
                 if (value < self.double_chance) {
                     n.connections.set(.Down, .Double);
                 }
@@ -589,18 +603,24 @@ pub const Board = struct {
         for (0..self.nodes) |i| {
             const n: *Node = &self.grid[i];
 
-            const r = n.connections.get(.Right);
-            const d = n.connections.get(.Down);
+            var r = n.connections.get(.Right);
+            var d = n.connections.get(.Down);
+            if (user) {
+                r = n.user_connections.get(.Right);
+                d = n.user_connections.get(.Down);
+            }
 
             if (r != .None) {
-                n.bridges += @intFromEnum(r);
+                if (!user) n.bridges += @intFromEnum(r)
+                else n.user_bridges += @intFromEnum(r);
                 const rn = self.NodeLocateDir(i, .Right, true).?;
                 if (!user) self.grid[rn].bridges += @intFromEnum(r)
                 else self.grid[rn].user_bridges += @intFromEnum(r);
             }
 
             if (d != .None) {
-                n.bridges += @intFromEnum(d);
+                if (!user) n.bridges += @intFromEnum(d)
+                else n.user_bridges += @intFromEnum(d);
                 const dn = self.NodeLocateDir(i, .Down, true).?;
                 if (!user) self.grid[dn].bridges += @intFromEnum(d)
                 else self.grid[dn].user_bridges += @intFromEnum(d);
@@ -752,8 +772,8 @@ pub const Board = struct {
                 .x=cg_start.x,
                 .y=@floatFromInt(self.strt_y + board_square - self.node_space),
             };
-            DrawLineDashed(rg_start, rg_end, 2, 2, raylib.GRAY);
-            DrawLineDashed(cg_start, cg_end, 2, 2, raylib.GRAY);
+            raylib.drawLineDashed(rg_start, rg_end, 2, 2, raylib.Color.gray);
+            raylib.drawLineDashed(cg_start, cg_end, 2, 2, raylib.Color.gray);
         }
     }
 
@@ -770,13 +790,13 @@ pub const Board = struct {
                 const oidx: usize = self.NodeLocateDir(i, .Right, true).?;
                 const dist = @abs(self.grid[oidx].x - nd.x);
 
-                raylib.DrawRectangle(pix_x, pix_y, @intCast(self.node_space*dist), @intCast(self.brdg_sz), col);
+                raylib.drawRectangle(pix_x, pix_y, @intCast(self.node_space*dist), @intCast(self.brdg_sz), col);
             } else if (conArr.get(.Right) == .Double) {
                 const oidx: usize = self.NodeLocateDir(i, .Right, true).?;
                 const dist = @abs(self.grid[oidx].x - nd.x);
 
-                raylib.DrawRectangle(pix_x, pix_y+@as(c_int, @intCast(self.brdg_sz*1)), @intCast(self.node_space*dist), @intCast(self.brdg_sz), col);
-                raylib.DrawRectangle(pix_x, pix_y-@as(c_int, @intCast(self.brdg_sz*1)), @intCast(self.node_space*dist), @intCast(self.brdg_sz), col);
+                raylib.drawRectangle(pix_x, pix_y+@as(c_int, @intCast(self.brdg_sz*1)), @intCast(self.node_space*dist), @intCast(self.brdg_sz), col);
+                raylib.drawRectangle(pix_x, pix_y-@as(c_int, @intCast(self.brdg_sz*1)), @intCast(self.node_space*dist), @intCast(self.brdg_sz), col);
             }
 
             //Downwards
@@ -784,13 +804,13 @@ pub const Board = struct {
                 const oidx: usize = self.NodeLocateDir(i, .Down, true).?;
                 const dist = @abs(self.grid[oidx].y - nd.y);
 
-                raylib.DrawRectangle(pix_x, pix_y, @intCast(self.brdg_sz), @intCast(self.node_space*dist), col);
+                raylib.drawRectangle(pix_x, pix_y, @intCast(self.brdg_sz), @intCast(self.node_space*dist), col);
             } else if (conArr.get(.Down) == .Double) {
                 const oidx: usize = self.NodeLocateDir(i, .Down, true).?;
                 const dist = @abs(self.grid[oidx].y - nd.y);
 
-                raylib.DrawRectangle(pix_x+@as(c_int, @intCast(self.brdg_sz*1)), pix_y, @intCast(self.brdg_sz), @intCast(self.node_space*dist), col);
-                raylib.DrawRectangle(pix_x-@as(c_int, @intCast(self.brdg_sz*1)), pix_y, @intCast(self.brdg_sz), @intCast(self.node_space*dist), col);
+                raylib.drawRectangle(pix_x+@as(c_int, @intCast(self.brdg_sz*1)), pix_y, @intCast(self.brdg_sz), @intCast(self.node_space*dist), col);
+                raylib.drawRectangle(pix_x-@as(c_int, @intCast(self.brdg_sz*1)), pix_y, @intCast(self.brdg_sz), @intCast(self.node_space*dist), col);
             }
 
         }
@@ -804,14 +824,15 @@ pub const Board = struct {
             const pix_y: c_int = @intCast(self.strt_y + nd.y * self.node_space);
 
             //Draw the Node
-            const col = if (nd.user_bridges < nd.bridges) raylib.BLACK else (if (nd.user_bridges == nd.bridges) raylib.DARKGREEN else raylib.RED);
-            raylib.DrawCircle(pix_x, pix_y, @floatFromInt(self.node_rd), col);
-            raylib.DrawCircle(pix_x, pix_y, @as(f32, @floatFromInt(self.node_rd)) * 0.9, globals.bg_color);
+            const col = if (nd.user_bridges < nd.bridges) raylib.Color.black else (if (nd.user_bridges == nd.bridges) raylib.Color.dark_green else raylib.Color.red);
+            raylib.drawCircle(pix_x, pix_y, @floatFromInt(self.node_rd), col);
+            raylib.drawCircle(pix_x, pix_y, @as(f32, @floatFromInt(self.node_rd)) * 0.85, globals.bg_color);
 
             //Draw the Bridge Count
             const buf = [_:0]u8{'0'+@as(u8, @truncate(nd.bridges))}; //Complaint: I'm not a huge fan of repeatedly stacked @ for casting
-            const txtPixSz = raylib.MeasureTextEx(raylib.GetFontDefault(), &buf, @as(f32, @floatFromInt(self.text_sz)), 0);
-            raylib.DrawText(&buf, pix_x - @as(u16, @intFromFloat(txtPixSz.x/2)), pix_y - @as(u16, @intFromFloat(txtPixSz.y/2)), @intCast(self.text_sz), globals.tx_color);
+            const defFont = raylib.getFontDefault(); //why in the world would this EVER BE AN ERROR?!?!?!
+            const txtPixSz = if (defFont) |defaultFont| raylib.measureTextEx(defaultFont, &buf, @as(f32, @floatFromInt(self.text_sz)), 0) else |_| raylib.Vector2{.x=0, .y=0};
+            raylib.drawText(&buf, pix_x - @as(u16, @intFromFloat(txtPixSz.x/2)), pix_y - @as(u16, @intFromFloat(txtPixSz.y/2)), @intCast(self.text_sz), globals.tx_color);
         }
     }
 
@@ -819,8 +840,8 @@ pub const Board = struct {
     pub fn Draw(self : *Board, reveal: bool) void {
         self.DrawGrid(); //Draw the Grid first
 
-        if (reveal) self.DrawBridges(false, raylib.GREEN);
-        self.DrawBridges(true, if (!reveal) raylib.BLACK else raylib.RED);
+        if (reveal) self.DrawBridges(false, raylib.Color.green);
+        self.DrawBridges(true, if (!reveal) raylib.Color.black else raylib.Color.red);
 
         self.DrawNodes();
     }

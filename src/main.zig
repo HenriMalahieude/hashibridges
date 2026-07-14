@@ -17,18 +17,18 @@ pub fn main() !void {
     //const arena: std.mem.Allocator = init.arena.allocator();
 
     std.debug.print("GAME: Initializing window of size {d} ^ 2\n", .{globals.window_square});
-    raylib.InitWindow(globals.window_square, globals.window_square, "Test Window");
+    raylib.initWindow(globals.window_square, globals.window_square, "Test Window");
 
     board.Generate(globals.DifficultyOptions.get(difficulty), null);
 
-    while (!raylib.WindowShouldClose()) {
+    while (!raylib.windowShouldClose()) {
         //NOTE: Mobile seems to handle interactions before the drawing better
         board.Interact();
 
-        raylib.BeginDrawing();
-            raylib.ClearBackground(globals.bg_color);
+        raylib.beginDrawing();
+            raylib.clearBackground(globals.bg_color);
 
             board.Draw(false);
-        raylib.EndDrawing();
+        raylib.endDrawing();
     }
 }
