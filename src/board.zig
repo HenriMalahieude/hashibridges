@@ -50,8 +50,13 @@ pub const Board = struct {
     square: u16 = 0,
     double_chance: u16 = 0,
 
+    status_message: [:0]const u8 = "",
     state : GameState = GameState.Ungenerated,
     revealed: bool = false,
+
+    interaction_started: bool = false,
+    interaction_mouse: bool = false,
+    interaction_startpos: raylib.Vector2 = raylib.Vector2{.x=0,.y=0},
 
     pub fn StaticCopyTo(from: *Board, to: *Board) void {
         to.nodes = from.nodes;
@@ -105,7 +110,7 @@ pub const Board = struct {
         return out;
     }
 
-    fn NodeLocateDirUncrossed(self: *Board, idx: usize, dir: Direction, pos: bool) ?usize {
+    fn NodeLocateDirUncrossed(self: *Board, idx: usize, dir: Direction, pos: bool, user: bool) ?usize {
         const m_jdx: ?usize = self.NodeLocateDir(idx, dir, pos);
 
         if (m_jdx) |jdx| { //we've located that it does have a possible ending
@@ -120,15 +125,18 @@ pub const Board = struct {
             for (0..self.nodes) |i| {
                 const n: *Node = &self.grid[i];
 
+                var conArr: *std.EnumArray(Direction, ConnectionType) = &n.connections;
+                if (user) conArr = &n.user_connections;
+
                 //Check the connections that are between the two AND only need to check 1 node
                 if (dir == Direction.Down and n.y > bse.y and n.y < end.y and n.x < bse.x) {
-                    if (n.connections.get(Direction.Right) != ConnectionType.None) { //There exists a connection, but does it cross us?
-                        const m_ldx: ?usize = self.NodeLocateDir(i, Direction.Right, true);
+                    if (conArr.get(.Right) != .None) { //There exists a connection, but does it cross us?
+                        const m_ldx: ?usize = self.NodeLocateDir(i, .Right, true);
                         if (m_ldx != null and self.grid[m_ldx.?].x > bse.x) return null;
                     }
                 } else if (n.x > bse.x and n.x < end.x and n.y < bse.y) {
-                    if (n.connections.get(Direction.Down) != ConnectionType.None) {
-                        const m_ldx: ?usize = self.NodeLocateDir(i, Direction.Down, true);
+                    if (conArr.get(.Down) != .None) {
+                        const m_ldx: ?usize = self.NodeLocateDir(i, .Down, true);
                         if (m_ldx != null and self.grid[m_ldx.?].y > bse.y) return null;
 
                     }
@@ -185,6 +193,9 @@ pub const Board = struct {
         self.SaltDoubles();
         self.EvaluateBridgeCounts(false);
         self.EvaluateBridgeCounts(true);
+
+        self.state = .Running;
+        self.status_message = ":|";
     }
 
     //test "TODO" {
@@ -339,8 +350,8 @@ pub const Board = struct {
             //Connect all nodes normally
             for (0..self.nodes) |i| { //no need to randomly select node, each node alr has random position
                 const n: *Node = &self.grid[i];
-                var right: ?usize = self.NodeLocateDirUncrossed(i, Direction.Right, true);
-                var down: ?usize = self.NodeLocateDirUncrossed(i, Direction.Down, true);
+                var right: ?usize = self.NodeLocateDirUncrossed(i, Direction.Right, true, false);
+                var down: ?usize = self.NodeLocateDirUncrossed(i, Direction.Down, true, false);
 
                 //Debug
                 //if (distance_max == self.square) {
@@ -464,12 +475,12 @@ pub const Board = struct {
                         const conRight = (n.connections.get(.Right) != .None);
                         const conDown = (n.connections.get(.Down) != .None);
                         const conLeft = bL: { //Complaint: I'd like to not have to label this tbh
-                            const leftNode = self.NodeLocateDirUncrossed(i, .Right, false) orelse break :bL false;
+                            const leftNode = self.NodeLocateDirUncrossed(i, .Right, false, false) orelse break :bL false;
                             if (self.grid[leftNode].connections.get(.Right) != .None) break :bL true;
                             break :bL false;
                         };
                         const conUp = bU: {
-                            const upNode = self.NodeLocateDirUncrossed(i, .Down, false) orelse break :bU false;
+                            const upNode = self.NodeLocateDirUncrossed(i, .Down, false, false) orelse break :bU false;
                             if (self.grid[upNode].connections.get(.Down) != .None) break :bU true;
                             break :bU false;
                         };
@@ -501,7 +512,7 @@ pub const Board = struct {
                                 node_cand.y = if (args.horz) n.y else @truncate(p);
 
                                 //Do we still connect back
-                                const tmp = self.NodeLocateDirUncrossed(ni, if (args.horz) .Right else .Down, args.pos);
+                                const tmp = self.NodeLocateDirUncrossed(ni, if (args.horz) .Right else .Down, args.pos, false);
                                 if (tmp == null or tmp.? != self.nodes-1) {
                                     if (args.pos) { break; }
                                     else continue; //Complaint: cannot do followup else's w/o curlies {}
@@ -513,7 +524,7 @@ pub const Board = struct {
                                     .{.dir=.Down, .pos=true},
                                     .{.dir=.Down, .pos=false},
                                 }) |arg2| {
-                                    const oth = self.NodeLocateDirUncrossed(self.nodes-1, arg2.dir, arg2.pos);
+                                    const oth = self.NodeLocateDirUncrossed(self.nodes-1, arg2.dir, arg2.pos, false);
                                     //we've located a valid spot to connect the subgraphs and it isn't already overtaken
                                     if (oth != null and self.grid[oth.?].id == big_id and self.grid[oth.?].connections.get(arg2.dir) == .None) {
                                         //std.debug.print("\nBased off {}, {}\n", .{n.x, n.y});
@@ -521,7 +532,7 @@ pub const Board = struct {
                                         //Did we actually cut a bridge? If so, disregard new connection
                                         //If we are cutting a bridge, inherit the bridge from target
                                         const inh_dir: Direction = (if (args.horz) .Down else .Right);
-                                        const inh = self.NodeLocateDirUncrossed(self.nodes-1, inh_dir, false);
+                                        const inh = self.NodeLocateDirUncrossed(self.nodes-1, inh_dir, false, false);
                                         if (inh != null and self.grid[inh.?].id != big_id) break :loop_node_axi; //crossing ourselves, or someone else
 
                                         //Connect subgraph to join point
@@ -643,12 +654,12 @@ pub const Board = struct {
                 const conRight = (n.connections.get(.Right) != .None);
                 const conDown = (n.connections.get(.Down) != .None);
                 const conLeft = bL: { //Complaint: I'd like to not have to label this tbh
-                    const leftNode = self.NodeLocateDirUncrossed(i, .Right, false) orelse break :bL false;
+                    const leftNode = self.NodeLocateDirUncrossed(i, .Right, false, false) orelse break :bL false;
                     if (self.grid[leftNode].connections.get(.Right) != .None) break :bL true;
                     break :bL false;
                 };
                 const conUp = bU: {
-                    const upNode = self.NodeLocateDirUncrossed(i, .Down, false) orelse break :bU false;
+                    const upNode = self.NodeLocateDirUncrossed(i, .Down, false, false) orelse break :bU false;
                     if (self.grid[upNode].connections.get(.Down) != .None) break :bU true;
                     break :bU false;
                 };
@@ -694,7 +705,7 @@ pub const Board = struct {
                         }
 
                         //Connection Check
-                        const chk = self.NodeLocateDirUncrossed(i, if (args.horz) .Right else .Down, args.pos);
+                        const chk = self.NodeLocateDirUncrossed(i, if (args.horz) .Right else .Down, args.pos, false);
                         if (chk == null or chk.? != (self.nodes-1)) {
                             //std.debug.print("No connect @ ({}, {})\n", .{node_cand.x, node_cand.y});
                             if (args.pos) break //means we can't continue anymore, for positive case
@@ -702,8 +713,8 @@ pub const Board = struct {
                         }
 
                         //Crossing/Inheritance Check
-                        const leftNode = self.NodeLocateDirUncrossed(self.nodes-1, .Right, false);
-                        const upNode = self.NodeLocateDirUncrossed(self.nodes-1, .Down, false);
+                        const leftNode = self.NodeLocateDirUncrossed(self.nodes-1, .Right, false, false);
+                        const upNode = self.NodeLocateDirUncrossed(self.nodes-1, .Down, false, false);
                         if ((leftNode != null and leftNode.? != i and !args.horz and self.grid[leftNode.?].connections.get(.Right) != .None)
                                 or (upNode != null and upNode.? != i and args.horz and self.grid[upNode.?].connections.get(.Down) != .None)) {
                             //std.debug.print("Crossing @ ({}, {})\n", .{node_cand.x, node_cand.y});
@@ -712,9 +723,9 @@ pub const Board = struct {
                         }
 
                         //Ambiguity Check (would make the graph hard to solve)
-                        const unconRight = ucR: {const rightNode = self.NodeLocateDirUncrossed(self.nodes-1, .Right, true); break :ucR (rightNode != null and rightNode != i);};
+                        const unconRight = ucR: {const rightNode = self.NodeLocateDirUncrossed(self.nodes-1, .Right, true, false); break :ucR (rightNode != null and rightNode != i);};
                         const unconLeft = (leftNode != null and leftNode != i);
-                        const unconDown = ucD: {const downNode = self.NodeLocateDirUncrossed(self.nodes-1, .Down, true); break :ucD (downNode != null and downNode != i);};
+                        const unconDown = ucD: {const downNode = self.NodeLocateDirUncrossed(self.nodes-1, .Down, true, false); break :ucD (downNode != null and downNode != i);};
                         const unconUp = (upNode != null and upNode != i);
 
                         if (unconRight or unconLeft or unconDown or unconUp) {
@@ -818,6 +829,69 @@ pub const Board = struct {
         }
     }
 
+    fn DrawUserInteraction(self: *Board, col: raylib.Color) void {
+        const interaction_node_idx = if (self.interaction_started) self.ConvertScreenToNodeId(self.interaction_startpos) else null;
+
+        if (self.interaction_started and interaction_node_idx != null) {
+            const nd: *Node = &self.grid[interaction_node_idx.?];
+            const end = if (self.interaction_mouse) raylib.Vector2{ .x = @floatFromInt(raylib.getMouseX()), .y = @floatFromInt(raylib.getMouseY())} else raylib.getTouchPosition(0);
+
+            const xdiff = if (end.x > self.interaction_startpos.x) end.x - self.interaction_startpos.x else self.interaction_startpos.x - end.x;
+            const ydiff = if (end.y > self.interaction_startpos.y) end.y - self.interaction_startpos.y else self.interaction_startpos.y - end.y;
+            const is_horz = xdiff > ydiff;
+
+            var possible: bool = false;
+            var str_x: i32 = @intCast(nd.x);
+            var str_y: i32 = @intCast(nd.y); //assuming a right/down edge
+            var dist: i32 = 0; //Complaint: I got "variable of type 'comptime_int' must be const or comptime" .... what? Just tell me I forgot the type qualifier
+
+            if (is_horz) {
+                const right_idx = self.NodeLocateDirUncrossed(interaction_node_idx.?, .Right, true, true);
+                const left_idx = self.NodeLocateDirUncrossed(interaction_node_idx.?, .Right, false, true);
+                if ((end.x > self.interaction_startpos.x) and right_idx != null) {
+                    possible = true;
+                    dist = @as(i32, @intCast(self.grid[right_idx.?].x)) - str_x;
+                } else if ((end.x < self.interaction_startpos.x) and left_idx != null) { //leftward
+                    possible = true;
+                    dist = @as(i32, @intCast(self.grid[left_idx.?].x)) - str_x;
+
+                    str_x += dist;
+                    dist *= -1;
+                }
+            } else { //vertical
+                const down_idx = self.NodeLocateDirUncrossed(interaction_node_idx.?, .Down, true, true);
+                const up_idx = self.NodeLocateDirUncrossed(interaction_node_idx.?, .Down, false, true);
+                if ((end.y > self.interaction_startpos.y) and down_idx != null) {
+                    possible = true;
+                    //Complaint: without the @as, it literally cannot understand what I want? despite the dest and src2 same type?
+                    dist = @as(i32, @intCast(self.grid[down_idx.?].y)) - str_y;
+                } else if ((end.y < self.interaction_startpos.y) and up_idx != null) {
+                    possible = true;
+                    dist = @as(i32, @intCast(self.grid[up_idx.?].y)) - str_y;
+
+                    str_y += dist;
+                    dist *= -1;
+                }
+            }
+
+            //TODO: Untested
+            //Complaint: Yup just tested, it will not auto "intCast" without the @as
+            if (possible) {
+                //std.debug.print("({}, {}); Len {}\r", .{str_x, str_y, dist});
+
+                const width: c_int = @intCast(self.brdg_sz*3);
+                const height: c_int = @as(c_int, @intCast(self.node_space)) * dist;
+                raylib.drawRectangle(
+                    @as(c_int, @intCast(@as(u32, @intCast(str_x))*self.node_space+self.strt_x)) - @divFloor(width,2), //Complaint: Can we PLEASE have a default divison POLEASER:LJI
+                    @as(c_int, @intCast(@as(u32, @intCast(str_y))*self.node_space+self.strt_y)) - @divFloor(width,2),
+                    if (is_horz) height else width,
+                    if (is_horz) width else height,
+                    col
+                );
+            }
+        }
+    }
+
     pub fn DrawNodes(self: *Board) void {
         for (0..self.nodes) |i| {
             const nd: *Node = &self.grid[i];
@@ -826,7 +900,8 @@ pub const Board = struct {
             const pix_y: c_int = @intCast(self.strt_y + nd.y * self.node_space);
 
             //Draw the Node
-            const col = if (nd.user_bridges < nd.bridges) raylib.Color.black else (if (nd.user_bridges == nd.bridges) raylib.Color.dark_green else raylib.Color.red);
+            var col = if (nd.user_bridges < nd.bridges) raylib.Color.black else (if (nd.user_bridges == nd.bridges) raylib.Color.green else raylib.Color.red);
+            if (self.state == .Complete) col = raylib.Color.blue; //notify them they're done
             raylib.drawCircle(pix_x, pix_y, @floatFromInt(self.node_rd), col);
             raylib.drawCircle(pix_x, pix_y, @as(f32, @floatFromInt(self.node_rd)) * 0.85, globals.bg_color);
 
@@ -842,20 +917,150 @@ pub const Board = struct {
     pub fn Draw(self : *Board) void {
         self.DrawGrid(); //Draw the Grid first
 
-        if (self.revealed) self.DrawBridges(false, raylib.Color.green);
-        self.DrawBridges(true, if (!self.revealed) raylib.Color.black else raylib.Color.red);
+        if (self.revealed) self.DrawBridges(false, raylib.Color{.r=0, .g=255, .b=127, .a=200});
+        self.DrawBridges(true, if (!self.revealed) raylib.Color.black else raylib.Color{.r=255, .g=0, .b=127, .a=100});
+        self.DrawUserInteraction(raylib.Color.yellow);
 
         self.DrawNodes();
     }
 
-    /// Interact with the board using Raylib
-    pub fn Interact(self: *Board) void {
-        self.DrawInterface();
+    //Complaint: FUCK CONVERSIONS WHY IS THIS SO FUCKING HARD WHEN I'M USING BOTH UNSIGNED AND SIGNED VARIABLES
+    //              FUCK I GUESS I SHOULD ALWAYS ASSUME I'LL NEED A FUCKING NEGATIVE REPRESENTATION
+    fn ConvertScreenToNodeId(self: *Board, pos: raylib.Vector2) ?usize {
+        const strt_x: i32 = @intCast(self.strt_x);
+        const strt_y: i32 = @intCast(self.strt_y);
+
+        const node_spacei: i32 = @intCast(self.node_space);
+        const pos_x: i32 = @intFromFloat(pos.x);
+        const pos_y: i32 = @intFromFloat(pos.y);
+
+        //const x: i32 = @divFloor((@as(i32, @intFromFloat(pos.x)) - @as(i32, @intCast(self.strt_x - self.node_space))), @as(i32, @intCast(self.node_space)));
+        const x: i32 = @divFloor((pos_x - (strt_x - @divFloor(node_spacei, 2))), node_spacei);
+        //const y: i32 = @divFloor((@as(i32, @intFromFloat(pos.y)) - @as(i32, @intCast(self.strt_y - self.node_space))), @as(i32, @intCast(self.node_space)));
+        const y: i32 = @divFloor((pos_y - (strt_y - @divFloor(node_spacei, 2))), node_spacei);
+        //std.debug.print("\tScreen ({}, {}) ---> ({}, {}) Node\n", .{pos.x, pos.y, x, y});
+
+        if (x < 0 or y < 0) return null;
+
+        return self.NodeLocateCoord(@truncate(@as(u32, @intCast(x))), @truncate(@as(u32, @intCast(y))));
     }
 
-    fn DrawInterface(self : *Board) void {
+    /// Interact with the board using Raylib
+    pub fn Interact(self: *Board) void {
+        if (self.DrawInterface()) return; //interacted with the interface, move on
+
+        if (self.state == GameState.Complete) return; //we're done, nothing to do
+
+        const m1_down = raylib.isMouseButtonDown(raylib.MouseButton.left);
+        const tp_active = raylib.getTouchPointCount() > 0;
+        if (!self.interaction_started and (m1_down or tp_active)) {
+            self.interaction_started = true;
+            if (m1_down) {
+                self.interaction_mouse = true;
+                self.interaction_startpos = raylib.Vector2{ .x = @floatFromInt(raylib.getMouseX()), .y = @floatFromInt(raylib.getMouseY())};
+            } else if (tp_active) {
+                self.interaction_mouse = false;
+                self.interaction_startpos = raylib.getTouchPosition(0);
+            } else unreachable;
+
+            //TODO: Check that we interact within bounds, frankly... not in the mood to deal with the type casting again
+
+            //std.debug.print("Interaction Started @ pix ({}, {}) (mouse? {})\n", .{self.interaction_startpos.x, self.interaction_startpos.y, self.interaction_mouse});
+            //std.debug.print("\tThat tracks to node: {}\n", .{self.ConvertScreenToNodeId(self.interaction_startpos) orelse 0xfff});
+        }
+
+        if (self.interaction_started and ((!m1_down and self.interaction_mouse) or (!tp_active and !self.interaction_mouse))) {
+            self.interaction_started = false;
+            if (!m1_down and self.interaction_mouse) {
+                self.CreateBridge(self.interaction_startpos, raylib.Vector2{ .x = @floatFromInt(raylib.getMouseX()), .y = @floatFromInt(raylib.getMouseY())});
+            } else if (!tp_active and !self.interaction_mouse) {
+                self.CreateBridge(self.interaction_startpos, raylib.getTouchPosition(0));
+            } else unreachable;
+
+            //std.debug.print("Interaction Ended!\n", .{});
+            self.interaction_startpos = raylib.Vector2{.x=0, .y=0};
+            self.CheckGameWin();
+        }
+    }
+
+    fn CheckGameWin(self: *Board) void {
+        var complete_match: bool = true;
+        var numerical_match: bool = true;
+
+        for (self.grid[0..self.nodes]) |*n| {
+            if (n.bridges != n.user_bridges) numerical_match = false;
+
+            if (n.connections.get(.Right) != n.user_connections.get(.Right) or n.connections.get(.Down) != n.user_connections.get(.Down)) {
+                complete_match = false;
+            }
+
+            if (!complete_match and !numerical_match) return;
+        }
+
+        if (complete_match and !numerical_match) {
+            self.status_message = "?!? Error in Game State ?!?";
+            return;
+        }
+
+        if (!complete_match and numerical_match) {
+            self.status_message = "? Islands or Ambiguous Graph ?";
+            return;
+        }
+
+        if (complete_match and numerical_match) {
+            self.status_message = "! Complete !";
+            self.state = .Complete;
+            return;
+        }
+
+        unreachable;
+    }
+
+    /// Called when an interaction has begun and ended, start and end are in pixels of screen
+    fn CreateBridge(self: *Board, start: raylib.Vector2, end: raylib.Vector2) void {
+        const s_idx = self.ConvertScreenToNodeId(start) orelse return;
+        //if (s_idx == null) return;
+
+        const xdiff = if (end.x > self.interaction_startpos.x) end.x - self.interaction_startpos.x else self.interaction_startpos.x - end.x;
+        const ydiff = if (end.y > self.interaction_startpos.y) end.y - self.interaction_startpos.y else self.interaction_startpos.y - end.y;
+        const is_horz = xdiff > ydiff;
+
+        if (is_horz) {
+            const right_idx = self.NodeLocateDirUncrossed(s_idx, .Right, true, true);
+            const left_idx = self.NodeLocateDirUncrossed(s_idx, .Right, false, true);
+            if (end.x > self.interaction_startpos.x and right_idx != null) { //rightwards
+                self.FlipBridge(s_idx, .Right);
+            } else if (end.x < self.interaction_startpos.x and left_idx != null) { //
+                self.FlipBridge(left_idx.?, .Right);
+            }
+        } else {
+            const down_idx = self.NodeLocateDirUncrossed(s_idx, .Down, true, true);
+            const up_idx = self.NodeLocateDirUncrossed(s_idx, .Down, false, true);
+            if (end.y > self.interaction_startpos.y and down_idx != null) {
+                self.FlipBridge(s_idx, .Down);
+            } else if (end.y < self.interaction_startpos.y and up_idx != null) {
+                self.FlipBridge(up_idx.?, .Down);
+            }
+        }
+    }
+
+    fn FlipBridge(self: *Board, node: usize, dir: Direction) void {
+        std.debug.assert(node < self.nodes);
+
+        var user_conn = @intFromEnum(self.grid[node].user_connections.get(dir));
+        user_conn += 1;
+        if (user_conn > @intFromEnum(ConnectionType.Double)) user_conn = 0;
+        self.grid[node].user_connections.set(dir, @enumFromInt(user_conn));
+
+        self.EvaluateBridgeCounts(true); //TODO: this is the lazy way out (optimize this)
+    }
+
+    /// Returns if the user interacted with the interface
+    fn DrawInterface(self : *Board) bool {
         const icon_sz: i16 = 2; //per pixel of the 16x16 image
         const icon_pad: i16 = (@as(i16, @intCast(globals.interface_button_sz)) - (icon_sz*16)) / 2;
+
+        raylib.drawText(self.status_message, globals.interface_font_sz, globals.interface_font_sz, globals.interface_font_sz*2, raylib.Color.black);
 
         //Regenerate the Board
         const restart_rect = raylib.Rectangle{
@@ -918,6 +1123,8 @@ pub const Board = struct {
         raygui.drawIcon(@intFromEnum(raygui.IconName.help), @as(i32, @intFromFloat(dfc_rect.x))+icon_pad, @as(i32, @intFromFloat(dfc_rect.y))+icon_pad, icon_sz, raylib.Color.black);
 
         if (hint) { //surprisingly much easier than I thought
+
+            //TODO: Separate into two, remove mistakes, only when no mistakes do you give bridges
             for (self.grid[0..self.nodes]) |*n| {
                 const user_c_r = n.user_connections.get(.Right);
                 const trth_c_r = n.connections.get(.Right);
@@ -945,6 +1152,11 @@ pub const Board = struct {
                     break;
                 }
             }
+
+            self.EvaluateBridgeCounts(true);
+            self.CheckGameWin();
         }
+
+        return hint or reveal or regen or easy_btn or medi_btn or hard_btn or crzy_btn;
     }
 };
