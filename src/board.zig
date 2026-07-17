@@ -50,7 +50,8 @@ pub const Board = struct {
     square: u16 = 0,
     double_chance: u16 = 0,
 
-    status_message: [:0]const u8 = "",
+    status_message: [25:0]u8 = undefined,
+    time: f32 = 0, //in s
     state : GameState = GameState.Ungenerated,
     revealed: bool = false,
 
@@ -195,7 +196,8 @@ pub const Board = struct {
         self.EvaluateBridgeCounts(true);
 
         self.state = .Running;
-        self.status_message = ":|";
+        self.time = 0;
+        _ = std.fmt.bufPrint(&self.status_message, "T+0:00\x00", .{}) catch "";
     }
 
     //test "TODO" {
@@ -998,17 +1000,17 @@ pub const Board = struct {
         }
 
         if (complete_match and !numerical_match) {
-            self.status_message = "?!? Error in Game State ?!?";
+            _= std.fmt.bufPrint(&self.status_message, "?!? Error in Game State ?!?\x00", .{}) catch "";
             return;
         }
 
         if (!complete_match and numerical_match) {
-            self.status_message = "? Islands or Ambiguous Graph ?";
+            _ = std.fmt.bufPrint(&self.status_message, "? Islands or Ambiguous Graph ?\x00", .{}) catch "";
             return;
         }
 
         if (complete_match and numerical_match) {
-            self.status_message = "! Complete !";
+            //std.fmt.bufPrint(&self.status_message, "! Complete !", .{});
             self.state = .Complete;
             return;
         }
@@ -1060,17 +1062,34 @@ pub const Board = struct {
         const icon_sz: i16 = 2; //per pixel of the 16x16 image
         const icon_pad: i16 = (@as(i16, @intCast(globals.interface_button_sz)) - (icon_sz*16)) / 2;
 
-        raylib.drawText(self.status_message, globals.interface_font_sz, globals.interface_font_sz, globals.interface_font_sz*2, raylib.Color.black);
+        if (self.state == .Running) self.time += raylib.getFrameTime();
+        if (self.status_message[0] == 'T') { //Complaint: string formatting gives me shit I didn't ask for like '+'
+            _ = std.fmt.bufPrint(&self.status_message, "T+{d}:{d:0>2}\x00", .{@divFloor(@as(i32, @trunc(self.time)), 60), @as(u32, @intCast(@mod(@as(i32, @trunc(self.time)), 60)))}) catch "";
+        }
+
+        const status_len = raylib.measureText(&self.status_message, globals.interface_font_sz);
+        raylib.drawText(&self.status_message, @divFloor(globals.window_square, 2) - @divFloor(status_len, 2), globals.interface_font_sz, globals.interface_font_sz*2, raylib.Color.black);
 
         //Regenerate the Board
-        const restart_rect = raylib.Rectangle{
+        var restart_rect = raylib.Rectangle{
             .x = globals.window_square - globals.interface_button_sz - globals.interface_padding,
             .y = globals.interface_padding,
             .width = globals.interface_button_sz,
             .height = globals.interface_button_sz,
         };
         const regen = raygui.button(restart_rect, "");
-        raygui.drawIcon(211, restart_rect.x+icon_pad, restart_rect.y+icon_pad, icon_sz, raylib.Color.black);
+        raygui.drawIcon(211, @as(i32, @trunc(restart_rect.x))+icon_pad, @as(i32, @trunc(restart_rect.y))+icon_pad, icon_sz, raylib.Color.black); //Complaint: this didn't need casting until I messed with things
+
+        restart_rect.x -= restart_rect.width + globals.interface_padding;
+        const clear = raygui.button(restart_rect, "");
+        raygui.drawIcon(@intFromEnum(raygui.IconName.cross), @as(i32, @trunc(restart_rect.x))+icon_pad, @as(i32, @trunc(restart_rect.y))+icon_pad, icon_sz, raylib.Color.black);
+        if (clear and self.state != .Complete) {
+            for (self.grid[0..self.nodes]) |*n| {
+                n.user_connections.set(.Right, .None);
+                n.user_connections.set(.Down, .None);
+            }
+            self.EvaluateBridgeCounts(true);
+        }
 
         //Change the difficulty
         var dfc_rect = raylib.Rectangle{
@@ -1124,32 +1143,59 @@ pub const Board = struct {
 
         if (hint) { //surprisingly much easier than I thought
 
-            //TODO: Separate into two, remove mistakes, only when no mistakes do you give bridges
-            for (self.grid[0..self.nodes]) |*n| {
+            //First remove extra bridges, Then add bridges
+            var hint_given: bool = false;
+            for (self.grid[0..self.nodes]) |*n| { //Begin by removing mistakes
                 const user_c_r = n.user_connections.get(.Right);
                 const trth_c_r = n.connections.get(.Right);
 
                 const user_c_d = n.user_connections.get(.Down);
                 const trth_c_d = n.connections.get(.Down);
 
-                if (user_c_r != trth_c_r) {
-                    if (user_c_r == .None) n.user_connections.set(.Right, .Single)
-                    else if (user_c_r == .Single) switch (trth_c_r) {
-                        .None => n.user_connections.set(.Right, .None),
-                        .Single => unreachable,
-                        .Double => n.user_connections.set(.Right, .Double),
-                    } else n.user_connections.set(.Right, .Single);
-                    break;
+                if (user_c_r != trth_c_r and user_c_r != .None) {
+                    switch (trth_c_r) {
+                        .None   => {n.user_connections.set(.Right, .None);   hint_given = true; break;},
+                        .Single => {n.user_connections.set(.Right, .Single); hint_given = true; break;},
+                        .Double => {n.user_connections.set(.Right, .Double); hint_given = true; break;},
+                    }
                 }
 
-                if (user_c_d != trth_c_d) {
-                    if (user_c_d == .None) n.user_connections.set(.Down, .Single)
-                    else if (user_c_d == .Single) switch (trth_c_d) {
-                        .None => n.user_connections.set(.Down, .None),
-                        .Single => unreachable,
-                        .Double => n.user_connections.set(.Down, .Double),
-                    } else n.user_connections.set(.Down, .Single);
-                    break;
+                if (user_c_d != trth_c_d and user_c_d != .None) {
+                    switch (trth_c_d) {
+                        .None   => {n.user_connections.set(.Down, .None);   hint_given = true; break;},
+                        .Single => {n.user_connections.set(.Down, .Single); hint_given = true; break;},
+                        .Double => {n.user_connections.set(.Down, .Double); hint_given = true; break;},
+                    }
+                }
+            }
+
+            if (!hint_given) {
+                for (self.grid[0..self.nodes]) |*n| {
+                    const user_c_r = n.user_connections.get(.Right);
+                    const trth_c_r = n.connections.get(.Right);
+
+                    const user_c_d = n.user_connections.get(.Down);
+                    const trth_c_d = n.connections.get(.Down);
+
+                    if (user_c_r != trth_c_r) {
+                        if (user_c_r == .None) n.user_connections.set(.Right, .Single)
+                        else if (user_c_r == .Single) switch (trth_c_r) {
+                            .None => n.user_connections.set(.Right, .None),
+                            .Single => unreachable,
+                            .Double => n.user_connections.set(.Right, .Double),
+                        } else n.user_connections.set(.Right, .Single);
+                        break;
+                    }
+
+                    if (user_c_d != trth_c_d) {
+                        if (user_c_d == .None) n.user_connections.set(.Down, .Single)
+                        else if (user_c_d == .Single) switch (trth_c_d) {
+                            .None => n.user_connections.set(.Down, .None),
+                            .Single => unreachable,
+                            .Double => n.user_connections.set(.Down, .Double),
+                        } else n.user_connections.set(.Down, .Single);
+                        break;
+                    }
                 }
             }
 
