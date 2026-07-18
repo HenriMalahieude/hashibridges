@@ -12,6 +12,11 @@ const Io = std.Io;
 var board: boardImpl.Board = undefined;
 //var board_bak: boardImpl.Board = undefined;
 
+//Quiet a stupid emscripten error in 0.16.0
+//NOTE: This means that you can't use any 'std.debug.print' in your program, even if compiling with Release versions
+pub const std_options_debug_io = std.Io.failing;
+pub const panic = std.debug.no_panic;
+
 //init : std.process.Init as input
 pub fn main() !void {
     //const arena: std.mem.Allocator = init.arena.allocator();
@@ -22,7 +27,7 @@ pub fn main() !void {
     //raygui.setStyle(.button, .{.control=.text_color_focused}, raylib.colorToInt(raylib.Color.gray));
     //raygui.setStyle(.button, .{.control=.text_color_pressed}, 0xFFFFFF);
 
-    std.debug.print("GAME: Initializing window of size {d} ^ 2\n", .{globals.window_square});
+    //std.debug.print("GAME: Initializing window of size {d} ^ 2\n", .{globals.window_square});
     raylib.initWindow(globals.window_square, globals.window_square, "Test Window");
 
     board.Generate(globals.DifficultyOptions.get(globals.difficulty), null);

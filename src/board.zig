@@ -1,5 +1,5 @@
 const std = @import("std");
-const assert = std.debug.assert;
+//const assert = std.debug.assert;
 
 const globals = @import("globals.zig");
 const raylib = globals.raylib;
@@ -436,7 +436,7 @@ pub const Board = struct {
     pub fn ResolveUnconnectedSubgraphs(self: *Board) void {
         var ids: [globals.MaxNodes]IdInfo = undefined;
         var id_cnt = self.CalculateRemainingIds(&ids);
-        assert(id_cnt < globals.MaxNodes);
+        //assert(id_cnt < globals.MaxNodes);
 
         //Identify primary island
         var big_id = ids[0].id;
@@ -1047,7 +1047,7 @@ pub const Board = struct {
     }
 
     fn FlipBridge(self: *Board, node: usize, dir: Direction) void {
-        std.debug.assert(node < self.nodes);
+        //std.debug.assert(node < self.nodes);
 
         var user_conn = @intFromEnum(self.grid[node].user_connections.get(dir));
         user_conn += 1;
@@ -1067,7 +1067,7 @@ pub const Board = struct {
             _ = std.fmt.bufPrint(&self.status_message, "T+{d}:{d:0>2}\x00", .{@divFloor(@as(i32, @trunc(self.time)), 60), @as(u32, @intCast(@mod(@as(i32, @trunc(self.time)), 60)))}) catch "";
         }
 
-        const status_len = raylib.measureText(&self.status_message, globals.interface_font_sz);
+        const status_len = raylib.measureText(&self.status_message, globals.interface_font_sz*2);
         raylib.drawText(&self.status_message, @divFloor(globals.window_square, 2) - @divFloor(status_len, 2), globals.interface_font_sz, globals.interface_font_sz*2, raylib.Color.black);
 
         //Regenerate the Board
